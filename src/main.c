@@ -31,7 +31,7 @@ static void usage(void) {
                 "  generate <dir>           generator mode: write units into <dir>\n"
                 "\n"
                 "options:\n"
-                "  --config <path>       config file (default /bedrock/etc/foreign-units.conf)\n"
+                "  --config <path>       config file (default /bedrock/etc/global-units.conf)\n"
                 "  --strata-root <path>  strata root (default /bedrock/strata)\n"
                 "  --local <stratum>     override [resolve] init\n"
                 "  --force               save even if analysis failed\n");
@@ -57,9 +57,40 @@ static void print_diags(const struct plan *p, int errors) {
                 fprintf(stderr, "warning: %s\n", p->warns.v[i]);
 }
 
+static char *detect_init_stratum(const char *strata_root) {
+        const char *env = getenv("BRL_INIT_STRATUM");
+        if (env && *env)
+                return xstrdup(env);
+
+        char *link = path_concat(strata_root, "init");
+        char *res = realpath(link, NULL);
+        free(link);
+        if (!res)
+                return NULL;
+
+        const char *base = strrchr(res, '/');
+        char *name = xstrdup(base ? base + 1 : res);
+        free(res);
+        return name;
+}
+
 static int analyse(struct opts *o, struct config *cfg, struct plan *p,
                    struct world *w, strvec *strata) {
         memset(p, 0, sizeof *p);
+
+        if (o->local) {
+                free(cfg->init);
+                cfg->init = xstrdup(o->local);
+        } else if (cfg->init && strcmp(cfg->init, "auto") == 0) {
+                char *d = detect_init_stratum(o->strata_root);
+                if (!d) {
+                        fprintf(stderr, "error: cannot detect init stratum\n");
+                        return -1;
+                }
+                free(cfg->init);
+                cfg->init = d;
+        }
+
         collect_strata(cfg, strata);
         char *err = NULL;
         if (world_init(w, o->strata_root, strata, &err) < 0) {
@@ -67,8 +98,6 @@ static int analyse(struct opts *o, struct config *cfg, struct plan *p,
                 free(err);
                 return -1;
         }
-        if (o->local)
-                cfg->init = xstrdup(o->local);
         int r = plan_build(p, cfg, w);
         print_diags(p, r < 0);
         return r;
@@ -357,7 +386,7 @@ static int cmd_delete(struct opts *o, char **args, int nargs) {
 
 int main(int argc, char **argv) {
         struct opts o = {
-                .config = "/bedrock/etc/foreign-units.conf",
+                .config = "/bedrock/etc/global-units.conf",
                 .strata_root = "/bedrock/strata",
         };
 

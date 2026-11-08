@@ -35,7 +35,7 @@ Line based INI. Unknown keys are hard errors.
 version = 1
 
 [resolve]
-init = arch
+init = auto
 local_only = multi-user.target, network-online.target, *.mount, *.device, systemd-*
 order = gentoo, debian
 
@@ -44,7 +44,8 @@ units = ssh.service
 units = apt-daily.timer
 ```
 
-- `init` — the stratum providing PID 1 (units there are native, never ported)
+- `init` — the stratum providing PID 1 (units there are native, never ported);
+  `auto` detects it from `$BRL_INIT_STRATUM` or `/bedrock/strata/init`
 - `local_only` — fnmatch patterns that always bind to the local stratum
 - `order` — fallback provider order for dependencies not provided by the
   consumer's own stratum or the local one
@@ -82,6 +83,9 @@ implicit socket/timer pairing keeps working.
 
 ## Usage
 
+The build is statically linked by default (`LDFLAGS = -static`) so the
+binary runs under any init stratum, including musl ones.
+
 ```sh
 make
 ./systemd-cross --config tests/test.conf --strata-root tests/fixtures/strata check
@@ -91,7 +95,7 @@ make
 
 `--strata-root` exists for offline testing; the default is
 `/bedrock/strata`. `--config` defaults to
-`/bedrock/etc/foreign-units.conf`.
+`/bedrock/etc/global-units.conf`.
 
 Generator mode: the first argument is the output directory. Under
 systemd the generator is invoked with three directories; only the first
@@ -107,6 +111,25 @@ Fixtures live in `tests/fixtures/strata/{alpha,beta}`. The test suite
 checks closure, dependency rewriting, Exec wrapping, path
 qualification, install links, mask/alias/template handling, and runs
 `systemd-analyze verify --root=` on the produced units.
+
+## Deployment
+
+```text
+/bedrock/libexec/systemd-cross                        static binary
+/bedrock/libexec/systemd-generators/systemd-cross     symlink, generator dir
+/bedrock/etc/global-units.conf                        config
+```
+
+The bedrock init script exports, just before handing off to the real init:
+
+```sh
+export SYSTEMD_GENERATOR_PATH="/bedrock/libexec/systemd-generators:"
+export BRL_INIT_STRATUM="${init_stratum}"
+```
+
+The trailing `:` keeps systemd's compiled-in generator search path. This makes
+the generator available regardless of which stratum provides PID 1, without
+relying on any stratum-private `/usr/local/lib`.
 
 ## Known limitations (v0.1)
 

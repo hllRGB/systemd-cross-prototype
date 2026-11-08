@@ -81,4 +81,9 @@ fi
 grep -q 'units = foo.service' "$TMP/edit.conf" || fail "setup did not add entry"
 pass "setup/delete roundtrip"
 
+# ---------------------------------------------------------------- generator invocation
+"$BIN" --config "$TMP/test.conf" --strata-root "$FIX" "$TMP/gen-direct" "$TMP/early" "$TMP/late" >/dev/null || fail "generator invocation"
+[ -f "$TMP/gen-direct/bedrock-beta-foo.service" ] || fail "generator invocation produced nothing"
+pass "generator invocation"
+
 echo "all tests passed"

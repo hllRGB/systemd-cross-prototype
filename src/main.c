@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -371,8 +372,9 @@ static int cmp_str(const void *a, const void *b) {
         return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-static void collect_enabled(const char *strata_root, const char *stratum,
-                            strvec *out, strvec *skipped_targets) {
+static void collect_enabled(const struct config *cfg, const char *strata_root,
+                            const char *stratum, strvec *out,
+                            strvec *skipped_targets, strvec *ignored) {
         char *base = path_abs(strata_root);
         char *dir = xasprintf("%s/%s/etc/systemd/system", base, stratum);
         free(base);
@@ -407,6 +409,17 @@ static void collect_enabled(const char *strata_root, const char *stratum,
                                         sv_push(skipped_targets, e->d_name);
                                 continue;
                         }
+
+                        int skip = 0;
+                        for (size_t k = 0; k < cfg->ignore.n; k++)
+                                if (fnmatch(cfg->ignore.v[k], e->d_name, 0) == 0)
+                                        skip = 1;
+                        if (skip) {
+                                if (!sv_contains(ignored, e->d_name))
+                                        sv_push(ignored, e->d_name);
+                                continue;
+                        }
+
                         if (!sv_contains(out, e->d_name))
                                 sv_push(out, e->d_name);
                 }
@@ -415,6 +428,42 @@ static void collect_enabled(const char *strata_root, const char *stratum,
         }
         closedir(dp);
         free(dir);
+}
+
+static void filter_available(const char *strata_root, const char *stratum,
+                             strvec *found, strvec *dangling) {
+        strvec names = {0};
+        sv_push(&names, stratum);
+
+        struct world w = {0};
+        char *err = NULL;
+        if (world_init(&w, strata_root, &names, &err) < 0) {
+                free(err);
+                sv_free(&names);
+                return;
+        }
+
+        struct stratum_idx *s = world_get(&w, stratum);
+        for (size_t i = 0; i < found->n; i++) {
+                struct uent *e = NULL;
+                int r = s ? sidx_resolve(s, found->v[i], &e) : -1;
+                if (r <= 0) {
+                        sv_push(dangling, found->v[i]);
+                        found->v[i][0] = 0;
+                }
+        }
+
+        size_t out = 0;
+        for (size_t i = 0; i < found->n; i++) {
+                if (found->v[i][0])
+                        found->v[out++] = found->v[i];
+                else
+                        free(found->v[i]);
+        }
+        found->n = out;
+
+        world_free(&w);
+        sv_free(&names);
 }
 
 static int cmd_import(struct opts *o, char **args, int nargs) {
@@ -446,8 +495,9 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
                 return 1;
         }
 
-        strvec found = {0}, targets = {0};
-        collect_enabled(o->strata_root, stratum, &found, &targets);
+        strvec found = {0}, targets = {0}, dangling = {0}, ignored = {0};
+        collect_enabled(&cfg, o->strata_root, stratum, &found, &targets, &ignored);
+        filter_available(o->strata_root, stratum, &found, &dangling);
         if (found.n > 1)
                 qsort(found.v, found.n, sizeof(char *), cmp_str);
 
@@ -469,6 +519,8 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
                 plan_free(&p);
                 sv_free(&found);
                 sv_free(&targets);
+                sv_free(&dangling);
+        sv_free(&ignored);
                 return 1;
         }
 
@@ -480,6 +532,8 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
                 plan_free(&p);
                 sv_free(&found);
                 sv_free(&targets);
+                sv_free(&dangling);
+        sv_free(&ignored);
                 return 1;
         }
 
@@ -495,6 +549,18 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
                 for (size_t i = 0; i < targets.n; i++)
                         printf("  %s\n", targets.v[i]);
         }
+        if (dangling.n) {
+                printf("skipped %zu dangling link%s (no unit file in %s):\n",
+                       dangling.n, dangling.n == 1 ? "" : "s", stratum);
+                for (size_t i = 0; i < dangling.n; i++)
+                        printf("  %s\n", dangling.v[i]);
+        }
+        if (ignored.n) {
+                printf("skipped %zu ignored link%s (matches [resolve] ignore):\n",
+                       ignored.n, ignored.n == 1 ? "" : "s");
+                for (size_t i = 0; i < ignored.n; i++)
+                        printf("  %s\n", ignored.v[i]);
+        }
 
         config_free(&cfg);
         world_free(&w);
@@ -502,6 +568,8 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
         plan_free(&p);
         sv_free(&found);
         sv_free(&targets);
+        sv_free(&dangling);
+        sv_free(&ignored);
         return 0;
 }
 
@@ -540,8 +608,10 @@ int main(int argc, char **argv) {
                 .strata_root = "/bedrock/strata",
         };
 
-        int i = 1;
-        for (; i < argc; i++) {
+        char **pos = xmalloc((size_t)argc * sizeof(*pos));
+        int np = 0;
+
+        for (int i = 1; i < argc; i++) {
                 if (strcmp(argv[i], "--config") == 0 && i + 1 < argc)
                         o.config = argv[++i];
                 else if (strcmp(argv[i], "--strata-root") == 0 && i + 1 < argc)
@@ -557,26 +627,26 @@ int main(int argc, char **argv) {
                 else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
                         usage();
                         return 0;
-                } else if (argv[i][0] == '-') {
+                } else if (argv[i][0] == '-' && argv[i][1] != 0) {
                         fprintf(stderr, "error: unknown option %s\n", argv[i]);
                         return 2;
                 } else
-                        break;
+                        pos[np++] = argv[i];
         }
 
-        if (i >= argc) {
+        if (np == 0) {
                 usage();
                 return 2;
         }
 
-        const char *cmd = argv[i++];
-        char **args = argv + i;
-        int nargs = argc - i;
+        const char *cmd = pos[0];
+        char **args = pos + 1;
+        int nargs = np - 1;
 
         /* systemd invokes generators with three directory arguments and no
          * subcommand; the first one is an absolute path. */
         if (cmd[0] == '/')
-                return cmd_generate(&o, argv + i - 1, nargs + 1);
+                return cmd_generate(&o, pos, np);
 
         if (strcmp(cmd, "generate") == 0)
                 return cmd_generate(&o, args, nargs);

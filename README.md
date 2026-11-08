@@ -49,6 +49,7 @@ units = apt-daily.timer
 - `local_only` — fnmatch patterns that always bind to the local stratum
 - `order` — fallback provider order for dependencies not provided by the
   consumer's own stratum or the local one
+- `ignore` — fnmatch patterns skipped by `import` (e.g. `bedrock-*`)
 - `[stratum X]` / `units` — explicit whitelist entries
 
 ### Resolution rules

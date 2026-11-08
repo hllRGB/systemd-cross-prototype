@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <fnmatch.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,31 @@ struct opts {
         int no_reload;
         int dry;
 };
+
+static int use_color_out, use_color_err;
+
+#define RST "\033[0m"
+#define BOLD "\033[1m"
+#define RED "\033[91m"
+#define YEL "\033[93m"
+#define CYA "\033[36m"
+#define GRN "\033[32m"
+
+static const char *oc(const char *code) { return use_color_out ? code : ""; }
+static const char *ec(const char *code) { return use_color_err ? code : ""; }
+
+static void errf(const char *fmt, ...) {
+        va_list ap;
+        char *msg = NULL;
+
+        va_start(ap, fmt);
+        if (vasprintf(&msg, fmt, ap) < 0)
+                msg = NULL;
+        va_end(ap);
+
+        fprintf(stderr, "%serror:%s %s\n", ec(RED), ec(RST), msg ? msg : fmt);
+        free(msg);
+}
 
 static void usage(void) {
         fprintf(stderr,
@@ -56,10 +82,10 @@ static void collect_strata(const struct config *cfg, strvec *out) {
 static void print_diags(const struct plan *p, int errors) {
         if (errors) {
                 for (size_t i = 0; i < p->errors.n; i++)
-                        fprintf(stderr, "error: %s\n", p->errors.v[i]);
+                        errf("%s", p->errors.v[i]);
         }
         for (size_t i = 0; i < p->warns.n; i++)
-                fprintf(stderr, "warning: %s\n", p->warns.v[i]);
+                fprintf(stderr, "%swarning:%s %s\n", ec(YEL), ec(RST), p->warns.v[i]);
 }
 
 static char *detect_init_stratum(const char *strata_root) {
@@ -88,7 +114,7 @@ static int normalize_init(struct opts *o, struct config *cfg) {
         if (cfg->init && strcmp(cfg->init, "auto") == 0) {
                 char *d = detect_init_stratum(o->strata_root);
                 if (!d) {
-                        fprintf(stderr, "error: cannot detect init stratum\n");
+                        errf("cannot detect init stratum");
                         return -1;
                 }
                 free(cfg->init);
@@ -107,7 +133,7 @@ static int analyse(struct opts *o, struct config *cfg, struct plan *p,
         collect_strata(cfg, strata);
         char *err = NULL;
         if (world_init(w, o->strata_root, strata, &err) < 0) {
-                fprintf(stderr, "error: %s\n", err ? err : "world init failed");
+                errf("%s", err ? err : "world init failed");
                 free(err);
                 return -1;
         }
@@ -154,7 +180,7 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
         struct config cfg;
         char *err = NULL;
         if (config_load(&cfg, o->config, &err) < 0) {
-                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                errf("%s", err ? err : "config load failed");
                 free(err);
                 return 1;
         }
@@ -164,7 +190,7 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
         strvec strata = {0};
         int r = analyse(o, &cfg, &p, &w, &strata);
         if (r < 0) {
-                fprintf(stderr, "error: not generating any unit\n");
+                errf("not generating any unit");
                 config_free(&cfg);
                 world_free(&w);
                 sv_free(&strata);
@@ -173,7 +199,7 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
         }
 
         if (mkdir_p(outdir) < 0) {
-                fprintf(stderr, "error: cannot create %s\n", outdir);
+                errf("cannot create %s", outdir);
                 return 1;
         }
 
@@ -181,7 +207,7 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
                 struct out_unit *u = &p.v[i];
                 char *path = path_concat(outdir, u->out);
                 if (write_file(path, u->text) < 0) {
-                        fprintf(stderr, "error: cannot write %s\n", path);
+                        errf("cannot write %s", path);
                         free(path);
                         return 1;
                 }
@@ -190,14 +216,14 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
                 for (size_t k = 0; k < u->wants.n; k++) {
                         char *d = xasprintf("%s/%s.wants", outdir, u->wants.v[k]);
                         if (mkdir_p(d) < 0) {
-                                fprintf(stderr, "error: cannot create %s\n", d);
+                                errf("cannot create %s", d);
                                 free(d);
                                 return 1;
                         }
                         char *lp = path_concat(d, u->out);
                         unlink(lp);
                         if (symlink_relative(u->out, lp) < 0) {
-                                fprintf(stderr, "error: cannot link %s\n", lp);
+                                errf("cannot link %s", lp);
                                 free(lp);
                                 free(d);
                                 return 1;
@@ -208,14 +234,14 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
                 for (size_t k = 0; k < u->requires.n; k++) {
                         char *d = xasprintf("%s/%s.requires", outdir, u->requires.v[k]);
                         if (mkdir_p(d) < 0) {
-                                fprintf(stderr, "error: cannot create %s\n", d);
+                                errf("cannot create %s", d);
                                 free(d);
                                 return 1;
                         }
                         char *lp = path_concat(d, u->out);
                         unlink(lp);
                         if (symlink_relative(u->out, lp) < 0) {
-                                fprintf(stderr, "error: cannot link %s\n", lp);
+                                errf("cannot link %s", lp);
                                 free(lp);
                                 free(d);
                                 return 1;
@@ -236,7 +262,7 @@ static int cmd_list(struct opts *o) {
         struct config cfg;
         char *err = NULL;
         if (config_load(&cfg, o->config, &err) < 0) {
-                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                errf("%s", err ? err : "config load failed");
                 free(err);
                 return 1;
         }
@@ -246,14 +272,19 @@ static int cmd_list(struct opts *o) {
         strvec strata = {0};
         int r = analyse(o, &cfg, &p, &w, &strata);
 
-        printf("local stratum: %s\n", cfg.init ? cfg.init : "(unset)");
-        printf("\nexplicit entries:\n");
+        printf("%slocal stratum:%s %s%s%s\n", oc(BOLD), oc(RST),
+               oc(CYA), cfg.init ? cfg.init : "(unset)", oc(RST));
+        printf("\n%s%s%s\n", oc(BOLD), "explicit entries:", oc(RST));
         for (size_t i = 0; i < cfg.n_units; i++)
-                printf("  %s/%s\n", cfg.units[i].stratum, cfg.units[i].name);
+                printf("  %s%s%s/%s\n", oc(CYA), cfg.units[i].stratum, oc(RST),
+                       cfg.units[i].name);
 
-        printf("\nplan (%zu unit%s):\n", p.n, p.n == 1 ? "" : "s");
+        printf("\n%splan (%zu unit%s):%s\n", oc(BOLD), p.n, p.n == 1 ? "" : "s", oc(RST));
         for (size_t i = 0; i < p.n; i++)
-                printf("  %s/%s -> %s\n", p.v[i].stratum, p.v[i].src, p.v[i].out);
+                printf("  %s%s%s/%s %s->%s %s%s%s\n",
+                       oc(CYA), p.v[i].stratum, oc(RST), p.v[i].src,
+                       oc(BOLD), oc(RST),
+                       oc(GRN), p.v[i].out, oc(RST));
 
         config_free(&cfg);
         world_free(&w);
@@ -266,7 +297,7 @@ static int cmd_tree(struct opts *o) {
         struct config cfg;
         char *err = NULL;
         if (config_load(&cfg, o->config, &err) < 0) {
-                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                errf("%s", err ? err : "config load failed");
                 free(err);
                 return 1;
         }
@@ -277,13 +308,16 @@ static int cmd_tree(struct opts *o) {
         int r = analyse(o, &cfg, &p, &w, &strata);
 
         for (size_t i = 0; i < p.n; i++) {
-                printf("%s (%s/%s)\n", p.v[i].out, p.v[i].stratum, p.v[i].src);
+                printf("%s%s%s %s(%s/%s)%s\n", oc(BOLD), oc(GRN), p.v[i].out,
+                       oc(RST), p.v[i].stratum, p.v[i].src, oc(RST));
                 for (size_t k = 0; k < p.v[i].edges.n; k++)
                         printf("  %s\n", p.v[i].edges.v[k]);
                 for (size_t k = 0; k < p.v[i].wants.n; k++)
-                        printf("  [Install] -> %s.wants\n", p.v[i].wants.v[k]);
+                        printf("  %s[Install]%s -> %s%s.wants%s\n", oc(BOLD), oc(RST),
+                               oc(CYA), p.v[i].wants.v[k], oc(RST));
                 for (size_t k = 0; k < p.v[i].requires.n; k++)
-                        printf("  [Install] -> %s.requires\n", p.v[i].requires.v[k]);
+                        printf("  %s[Install]%s -> %s%s.requires%s\n", oc(BOLD), oc(RST),
+                               oc(CYA), p.v[i].requires.v[k], oc(RST));
         }
 
         config_free(&cfg);
@@ -297,7 +331,7 @@ static int cmd_check(struct opts *o) {
         struct config cfg;
         char *err = NULL;
         if (config_load(&cfg, o->config, &err) < 0) {
-                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                errf("%s", err ? err : "config load failed");
                 free(err);
                 return 1;
         }
@@ -324,17 +358,17 @@ static int cmd_setup(struct opts *o, char **args, int nargs) {
         struct config cfg;
         char *err = NULL;
         if (config_load(&cfg, o->config, &err) < 0) {
-                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                errf("%s", err ? err : "config load failed");
                 free(err);
                 return 1;
         }
         if (!cfg.init || !*cfg.init) {
-                fprintf(stderr, "error: [resolve] init is not set in %s\n", o->config);
+                errf("[resolve] init is not set in %s", o->config);
                 config_free(&cfg);
                 return 1;
         }
         if (strcmp(stratum, cfg.init) == 0) {
-                fprintf(stderr, "error: %s is the local stratum, nothing to port\n", stratum);
+                errf("%s is the local stratum, nothing to port", stratum);
                 config_free(&cfg);
                 return 1;
         }
@@ -347,7 +381,7 @@ static int cmd_setup(struct opts *o, char **args, int nargs) {
         int r = analyse(o, &cfg, &p, &w, &strata);
 
         if (r < 0 && !o->force) {
-                fprintf(stderr, "error: analysis failed, config not saved\n");
+                errf("analysis failed, config not saved");
                 config_free(&cfg);
                 world_free(&w);
                 sv_free(&strata);
@@ -356,10 +390,12 @@ static int cmd_setup(struct opts *o, char **args, int nargs) {
         }
 
         if (config_save(&cfg) < 0)
-                fprintf(stderr, "error: cannot save %s\n", o->config);
+                errf("cannot save %s", o->config);
 
         for (size_t i = 0; i < p.n; i++)
-                printf("%s/%s -> %s\n", p.v[i].stratum, p.v[i].src, p.v[i].out);
+                printf("  %s%s%s/%s %s->%s %s%s%s\n",
+                       oc(CYA), p.v[i].stratum, oc(RST), p.v[i].src,
+                       oc(BOLD), oc(RST), oc(GRN), p.v[i].out, oc(RST));
 
         config_free(&cfg);
         world_free(&w);
@@ -476,7 +512,7 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
         struct config cfg;
         char *err = NULL;
         if (config_load(&cfg, o->config, &err) < 0) {
-                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                errf("%s", err ? err : "config load failed");
                 free(err);
                 return 1;
         }
@@ -485,12 +521,12 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
                 return 1;
         }
         if (!cfg.init || !*cfg.init) {
-                fprintf(stderr, "error: [resolve] init is not set\n");
+                errf("[resolve] init is not set");
                 config_free(&cfg);
                 return 1;
         }
         if (strcmp(stratum, cfg.init) == 0) {
-                fprintf(stderr, "error: %s is the local stratum, nothing to import\n", stratum);
+                errf("%s is the local stratum, nothing to import", stratum);
                 config_free(&cfg);
                 return 1;
         }
@@ -512,7 +548,7 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
         int r = analyse(o, &cfg, &p, &w, &strata);
 
         if (r < 0 && !o->force) {
-                fprintf(stderr, "error: analysis failed, config not saved\n");
+                errf("analysis failed, config not saved");
                 config_free(&cfg);
                 world_free(&w);
                 sv_free(&strata);
@@ -525,7 +561,7 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
         }
 
         if (!o->dry && config_save(&cfg) < 0) {
-                fprintf(stderr, "error: cannot save %s\n", o->config);
+                errf("cannot save %s", o->config);
                 config_free(&cfg);
                 world_free(&w);
                 sv_free(&strata);
@@ -537,27 +573,28 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
                 return 1;
         }
 
-        printf("%s: %zu enabled unit%s found, %zu new entr%s%s\n",
-               stratum, found.n, found.n == 1 ? "" : "s",
-               added, added == 1 ? "y" : "ies",
+        printf("%s%s%s: %s%zu%s enabled unit%s found, %s%zu%s new entr%s%s\n",
+               oc(CYA), stratum, oc(RST),
+               oc(BOLD), found.n, oc(RST), found.n == 1 ? "" : "s",
+               oc(BOLD), added, oc(RST), added == 1 ? "y" : "ies",
                o->dry ? " (dry run, not saved)" : "");
         for (size_t i = 0; i < found.n; i++)
                 printf("  %s\n", found.v[i]);
         if (targets.n) {
-                printf("skipped %zu target link%s (targets are never ported):\n",
-                       targets.n, targets.n == 1 ? "" : "s");
+                printf("%sskipped %zu target link%s (targets are never ported):%s\n",
+                       oc(YEL), targets.n, targets.n == 1 ? "" : "s", oc(RST));
                 for (size_t i = 0; i < targets.n; i++)
                         printf("  %s\n", targets.v[i]);
         }
         if (dangling.n) {
-                printf("skipped %zu dangling link%s (no unit file in %s):\n",
-                       dangling.n, dangling.n == 1 ? "" : "s", stratum);
+                printf("%sskipped %zu dangling link%s (no unit file in %s):%s\n",
+                       oc(YEL), dangling.n, dangling.n == 1 ? "" : "s", stratum, oc(RST));
                 for (size_t i = 0; i < dangling.n; i++)
                         printf("  %s\n", dangling.v[i]);
         }
         if (ignored.n) {
-                printf("skipped %zu ignored link%s (matches [resolve] ignore):\n",
-                       ignored.n, ignored.n == 1 ? "" : "s");
+                printf("%sskipped %zu ignored link%s (matches [resolve] ignore):%s\n",
+                       oc(YEL), ignored.n, ignored.n == 1 ? "" : "s", oc(RST));
                 for (size_t i = 0; i < ignored.n; i++)
                         printf("  %s\n", ignored.v[i]);
         }
@@ -583,17 +620,17 @@ static int cmd_delete(struct opts *o, char **args, int nargs) {
         struct config cfg;
         char *err = NULL;
         if (config_load(&cfg, o->config, &err) < 0) {
-                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                errf("%s", err ? err : "config load failed");
                 free(err);
                 return 1;
         }
         if (config_del(&cfg, stratum, unit) < 0) {
-                fprintf(stderr, "error: %s/%s is not an explicit entry\n", stratum, unit);
+                errf("%s/%s is not an explicit entry", stratum, unit);
                 config_free(&cfg);
                 return 1;
         }
         if (config_save(&cfg) < 0) {
-                fprintf(stderr, "error: cannot save %s\n", o->config);
+                errf("cannot save %s", o->config);
                 config_free(&cfg);
                 return 1;
         }
@@ -607,6 +644,9 @@ int main(int argc, char **argv) {
                 .config = "/bedrock/etc/global-units.conf",
                 .strata_root = "/bedrock/strata",
         };
+
+        use_color_out = isatty(STDOUT_FILENO) && !getenv("NO_COLOR");
+        use_color_err = isatty(STDERR_FILENO) && !getenv("NO_COLOR");
 
         char **pos = xmalloc((size_t)argc * sizeof(*pos));
         int np = 0;
@@ -628,7 +668,7 @@ int main(int argc, char **argv) {
                         usage();
                         return 0;
                 } else if (argv[i][0] == '-' && argv[i][1] != 0) {
-                        fprintf(stderr, "error: unknown option %s\n", argv[i]);
+                        errf("unknown option %s", argv[i]);
                         return 2;
                 } else
                         pos[np++] = argv[i];
@@ -645,8 +685,11 @@ int main(int argc, char **argv) {
 
         /* systemd invokes generators with three directory arguments and no
          * subcommand; the first one is an absolute path. */
-        if (cmd[0] == '/')
+        if (cmd[0] == '/') {
+                use_color_out = 0;
+                use_color_err = 0;
                 return cmd_generate(&o, pos, np);
+        }
 
         if (strcmp(cmd, "generate") == 0)
                 return cmd_generate(&o, args, nargs);
@@ -663,7 +706,7 @@ int main(int argc, char **argv) {
         if (strcmp(cmd, "delete") == 0)
                 return cmd_delete(&o, args, nargs);
 
-        fprintf(stderr, "error: unknown command %s\n", cmd);
+        errf("unknown command %s", cmd);
         usage();
         return 2;
 }

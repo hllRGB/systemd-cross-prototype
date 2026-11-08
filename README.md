@@ -112,9 +112,12 @@ SYSTEMD_CROSS_BIN=$PWD/systemd-cross sh cli/brl-systemd \
     --config tests/test.conf --strata-root tests/fixtures/strata list
 ```
 
-Options (`-c/--config`, `--strata-root`, `--local`, `--force`, `--dry-run`)
-may appear before or after the command. Defaults are
+Options (`-c/--config`, `--strata-root`, `--local`, `--user`, `--sudo`,
+`--force`, `--dry-run`) may appear before or after the command. Defaults are
 `/bedrock/etc/global-units.conf` and `/bedrock/strata`.
+
+With `--user`, config writes are performed through `sudo` by default;
+`--sudo <cmd>` selects another elevation command (for example `doas`).
 
 `import <unit>...` locates each unit (init stratum first, then `order`) and
 adds exactly those entries. `--from <stratum>` restricts the search.

@@ -9,15 +9,29 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const char *const UDIR[] = {
+static const char *const UDIR_SYSTEM[] = {
         "etc/systemd/system",
         "usr/local/lib/systemd/system",
         "usr/lib/systemd/system",
 };
-static const int N_UDIR = (int)(sizeof UDIR / sizeof UDIR[0]);
 
-const char *sidx_udir(int idx) {
-        return (idx >= 0 && idx < N_UDIR) ? UDIR[idx] : NULL;
+static const char *const UDIR_USER[] = {
+        "etc/systemd/user",
+        "usr/local/share/systemd/user",
+        "usr/share/systemd/user",
+        "usr/local/lib/systemd/user",
+        "usr/lib/systemd/user",
+};
+
+int sidx_nudir(const struct stratum_idx *s) {
+        return s->user ? (int)(sizeof UDIR_USER / sizeof UDIR_USER[0])
+                       : (int)(sizeof UDIR_SYSTEM / sizeof UDIR_SYSTEM[0]);
+}
+
+const char *sidx_udir(const struct stratum_idx *s, int idx) {
+        const char *const *dirs = s->user ? UDIR_USER : UDIR_SYSTEM;
+        int n = sidx_nudir(s);
+        return (idx >= 0 && idx < n) ? dirs[idx] : NULL;
 }
 
 static void ent_free(struct uent *e) {
@@ -63,9 +77,9 @@ static int under_dir(const char *path, const char *dir) {
         return strncmp(path, dir, n) == 0 && (path[n] == '/' || path[n] == 0);
 }
 
-static int path_is_in_roots(const char *root, const char *path) {
-        for (int d = 0; d < N_UDIR; d++) {
-                char *ud = path_concat(root, UDIR[d]);
+static int path_is_in_roots(const struct stratum_idx *s, const char *path) {
+        for (int d = 0; d < sidx_nudir(s); d++) {
+                char *ud = path_concat(s->root, sidx_udir(s, d));
                 int ok = under_dir(path, ud);
                 free(ud);
                 if (ok)
@@ -82,7 +96,7 @@ static int add_ent(struct stratum_idx *s, struct uent *e) {
 }
 
 static void scan_dir(struct stratum_idx *s, int d) {
-        char *ud = path_concat(s->root, UDIR[d]);
+        char *ud = path_concat(s->root, sidx_udir(s, d));
         DIR *dp = opendir(ud);
         if (!dp) {
                 free(ud);
@@ -137,7 +151,7 @@ static void scan_dir(struct stratum_idx *s, int d) {
                                         continue;
                                 }
                                 e.path = clean;
-                                if (path_is_in_roots(s->root, clean)) {
+                                if (path_is_in_roots(s, clean)) {
                                         e.kind = EK_ALIAS;
                                         e.canon = xstrdup(base_name(clean));
                                 } else {
@@ -156,12 +170,14 @@ static void scan_dir(struct stratum_idx *s, int d) {
         free(ud);
 }
 
-static int build_stratum(struct stratum_idx *s, const char *strata_root, const char *name, char **err) {
+static int build_stratum(struct stratum_idx *s, const char *strata_root,
+                         const char *name, int user, char **err) {
         memset(s, 0, sizeof *s);
         s->name = xstrdup(name);
+        s->user = user;
         s->root = path_concat(strata_root, name);
 
-        for (int d = 0; d < N_UDIR; d++)
+        for (int d = 0; d < sidx_nudir(s); d++)
                 scan_dir(s, d);
 
         qsort(s->v, s->n, sizeof(*s->v), cmp_ent);
@@ -180,14 +196,15 @@ static int build_stratum(struct stratum_idx *s, const char *strata_root, const c
         return 0;
 }
 
-int world_init(struct world *w, const char *strata_root, const strvec *names, char **err) {
+int world_init(struct world *w, const char *strata_root, const strvec *names,
+               int user, char **err) {
         memset(w, 0, sizeof *w);
         char *base = path_abs(strata_root);
         for (size_t i = 0; i < names->n; i++) {
                 if (world_get(w, names->v[i]))
                         continue;
                 w->v = xrealloc(w->v, (w->n + 1) * sizeof(*w->v));
-                if (build_stratum(&w->v[w->n], base, names->v[i], err) < 0) {
+                if (build_stratum(&w->v[w->n], base, names->v[i], user, err) < 0) {
                         free(base);
                         return -1;
                 }

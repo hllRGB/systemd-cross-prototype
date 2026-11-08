@@ -1,0 +1,5 @@
+[Unit]
+Description=Local User Unit
+
+[Service]
+ExecStart=/usr/bin/true

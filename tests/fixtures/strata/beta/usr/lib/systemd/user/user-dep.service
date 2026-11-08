@@ -1,0 +1,5 @@
+[Unit]
+Description=Foreign User Dependency
+
+[Service]
+ExecStart=/usr/bin/ufoo --dep

@@ -21,6 +21,7 @@ force=""
 dry=""
 endopts=""
 from=""
+user=""
 
 args_file=$(mktemp)
 tmpd=""
@@ -44,6 +45,7 @@ Options:
   ${color_cmd}-c, --config <path>      ${color_norm}config file (default ${color_file}/bedrock/etc/global-units.conf${color_norm})
   ${color_cmd}    --strata-root <path> ${color_norm}${color_term}strata${color_norm} root (default ${color_file}/bedrock/strata${color_norm})
   ${color_cmd}    --local <stratum>    ${color_norm}override ${color_cmd}[resolve] init${color_norm}
+  ${color_cmd}    --user               ${color_norm}operate on the ${color_term}user${color_norm} manager (${color_cmd}--user${color_norm} scope)
   ${color_cmd}    --from <stratum>     ${color_norm}restrict ${color_cmd}import${color_norm} to one ${color_term}stratum${color_norm}
   ${color_cmd}    --force              ${color_norm}keep changes even if analysis failed
   ${color_cmd}    --dry-run            ${color_norm}preview ${color_cmd}import${color_norm} without writing
@@ -98,6 +100,10 @@ while [ "${#}" -gt 0 ]; do
 		from="${2}"
 		shift 2
 		;;
+	"--user")
+		user=1
+		shift
+		;;
 	"--force")
 		force=1
 		shift
@@ -134,7 +140,15 @@ fi
 cmd="${1}"
 shift
 
-SYSTEMD_CROSS_CONFIG="${config:-${SYSTEMD_CROSS_CONFIG:-/bedrock/etc/global-units.conf}}"
+if [ "${user}" = "1" ]; then
+	defcfg=/bedrock/etc/global-units.user.conf
+	SYSTEMD_CROSS_SCOPE=user
+	export SYSTEMD_CROSS_SCOPE
+else
+	defcfg=/bedrock/etc/global-units.conf
+	unset SYSTEMD_CROSS_SCOPE
+fi
+SYSTEMD_CROSS_CONFIG="${config:-${SYSTEMD_CROSS_CONFIG:-${defcfg}}}"
 SYSTEMD_CROSS_STRATA_ROOT="${strata:-${SYSTEMD_CROSS_STRATA_ROOT:-/bedrock/strata}}"
 export SYSTEMD_CROSS_CONFIG SYSTEMD_CROSS_STRATA_ROOT
 if [ -n "${local}" ]; then

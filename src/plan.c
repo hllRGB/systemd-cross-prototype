@@ -109,8 +109,8 @@ static void collect_dropins(struct stratum_idx *s, const char *variant, sbuf *ou
         struct dfile *v = NULL;
         size_t n = 0, cap = 0;
 
-        for (int d = 0; d < 3; d++) {
-                char *dd = xasprintf("%s/%s/%s.d", s->root, sidx_udir(d), variant);
+        for (int d = 0; d < sidx_nudir(s); d++) {
+                char *dd = xasprintf("%s/%s/%s.d", s->root, sidx_udir(s, d), variant);
                 DIR *dp = opendir(dd);
                 if (!dp) {
                         free(dd);
@@ -649,7 +649,7 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                                 if (val[0] == '/' && strcmp(val, "/") != 0 && !is_shared_path(val))
                                         p_add(&p->warns,
                                               "%s: WorkingDirectory=%s is outside shared paths", name, val);
-                        } else if (strcmp(key, "CapabilityBoundingSet") == 0) {
+                        } else if (strcmp(key, "CapabilityBoundingSet") == 0 && !p->user) {
                                 sb_free(&newval);
                                 char *c = fix_caps(p, name, val);
                                 sb_add(&newval, c);
@@ -735,10 +735,11 @@ static char *visit_key(const char *stratum, const char *name) {
         return xasprintf("%s\x1f%s", stratum, name);
 }
 
-int plan_build(struct plan *p, struct config *cfg, struct world *w) {
+int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
         memset(p, 0, sizeof *p);
         p->cfg = cfg;
         p->w = w;
+        p->user = user;
 
         if (!cfg->init || !*cfg->init) {
                 p_add(&p->errors, "config: [resolve] init is not set");

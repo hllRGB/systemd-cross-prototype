@@ -154,6 +154,28 @@ The trailing `:` keeps systemd's compiled-in generator search path. This makes
 the generator available regardless of which stratum provides PID 1, without
 relying on any stratum-private `/usr/local/lib`.
 
+## User scope
+
+`--user` switches the tool to user-manager units:
+
+- search roots per stratum: `etc/systemd/user`, `usr/local/share/systemd/user`,
+  `usr/share/systemd/user`, `usr/local/lib/systemd/user`, `usr/lib/systemd/user`
+- default config: `/bedrock/etc/global-units.user.conf`
+- local-stratum user units are exposed as aliases in the user namespace
+
+Deployment uses a user generator directory and an environment variable
+delivered to `systemd --user` through PAM:
+
+```text
+/bedrock/libexec/systemd-user-generators/systemd-cross   (symlink)
+bedrock.conf [env-vars]:
+    SYSTEMD_GENERATOR_PATH = /bedrock/libexec/systemd-user-generators:
+```
+
+`/etc/environment` is read by `pam_env` for `user@.service`, so the user
+manager's own environment receives `SYSTEMD_GENERATOR_PATH` before it runs its
+generators. No kernel command line changes are involved.
+
 ## Known limitations (v0.1)
 
 - `ExecStart=@...` (argv0 override) is not translated

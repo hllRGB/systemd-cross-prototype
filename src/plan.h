@@ -21,6 +21,7 @@ struct plan {
         struct config *cfg;
         struct world *w;
         const char *local;
+        int user;
 
         struct out_unit *v;
         size_t n, cap;
@@ -29,7 +30,7 @@ struct plan {
         strvec warns;
 };
 
-int plan_build(struct plan *p, struct config *cfg, struct world *w);
+int plan_build(struct plan *p, struct config *cfg, struct world *w, int user);
 void plan_free(struct plan *p);
 
 char *plan_prefix_name(const char *stratum, const char *name);

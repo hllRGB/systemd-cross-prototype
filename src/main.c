@@ -21,6 +21,7 @@ struct opts {
         int no_reload;
         int dry;
         int machine;
+        int user;
 };
 
 static int use_color_out, use_color_err;
@@ -65,6 +66,7 @@ static void usage(void) {
                 "  --config <path>       config file (default /bedrock/etc/global-units.conf)\n"
                 "  --strata-root <path>  strata root (default /bedrock/strata)\n"
                 "  --local <stratum>     override [resolve] init\n"
+                "  --user                operate on the user manager (--user scope)\n"
                 "  --force               save even if analysis failed\n"
                 "  --dry-run             print what import would add, do not write\n");
 }
@@ -137,12 +139,12 @@ static int analyse(struct opts *o, struct config *cfg, struct plan *p,
 
         collect_strata(cfg, strata);
         char *err = NULL;
-        if (world_init(w, o->strata_root, strata, &err) < 0) {
+        if (world_init(w, o->strata_root, strata, o->user, &err) < 0) {
                 errf("%s", err ? err : "world init failed");
                 free(err);
                 return -1;
         }
-        int r = plan_build(p, cfg, w);
+        int r = plan_build(p, cfg, w, o->user);
         print_diags(p, r < 0);
         return r;
 }
@@ -347,7 +349,7 @@ static void collect_enabled(const struct config *cfg, const char *strata_root,
                             const char *stratum, strvec *out,
                             strvec *skipped_targets, strvec *ignored);
 static void filter_available(const char *strata_root, const char *stratum,
-                             strvec *found, strvec *dangling);
+                             int user, strvec *found, strvec *dangling);
 
 static int cmd_plan(struct opts *o) {
         struct config cfg;
@@ -420,7 +422,7 @@ static int cmd_units(struct opts *o, const char *stratum) {
                 collect_strata(&cfg, &strata);
 
         struct world w = {0};
-        if (world_init(&w, o->strata_root, &strata, &err) < 0) {
+        if (world_init(&w, o->strata_root, &strata, o->user, &err) < 0) {
                 fprintf(stderr, "error: %s\n", err ? err : "world init failed");
                 free(err);
                 config_free(&cfg);
@@ -469,7 +471,7 @@ static int cmd_locate(struct opts *o, const char *unit, const char *from) {
                 sv_push(&strata, from);
 
         struct world w = {0};
-        if (world_init(&w, o->strata_root, &strata, &err) < 0) {
+        if (world_init(&w, o->strata_root, &strata, o->user, &err) < 0) {
                 fprintf(stderr, "error: %s\n", err ? err : "world init failed");
                 free(err);
                 config_free(&cfg);
@@ -520,7 +522,7 @@ static int cmd_import_list(struct opts *o, const char *stratum) {
 
         strvec found = {0}, targets = {0}, dangling = {0}, ignored = {0};
         collect_enabled(&cfg, o->strata_root, stratum, &found, &targets, &ignored);
-        filter_available(o->strata_root, stratum, &found, &dangling);
+        filter_available(o->strata_root, stratum, o->user, &found, &dangling);
         if (found.n > 1)
                 qsort(found.v, found.n, sizeof(char *), cmp_str);
 
@@ -742,13 +744,13 @@ static void collect_enabled(const struct config *cfg, const char *strata_root,
 }
 
 static void filter_available(const char *strata_root, const char *stratum,
-                             strvec *found, strvec *dangling) {
+                             int user, strvec *found, strvec *dangling) {
         strvec names = {0};
         sv_push(&names, stratum);
 
         struct world w = {0};
         char *err = NULL;
-        if (world_init(&w, strata_root, &names, &err) < 0) {
+        if (world_init(&w, strata_root, &names, user, &err) < 0) {
                 free(err);
                 sv_free(&names);
                 return;
@@ -808,7 +810,7 @@ static int cmd_import(struct opts *o, char **args, int nargs) {
 
         strvec found = {0}, targets = {0}, dangling = {0}, ignored = {0};
         collect_enabled(&cfg, o->strata_root, stratum, &found, &targets, &ignored);
-        filter_available(o->strata_root, stratum, &found, &dangling);
+        filter_available(o->strata_root, stratum, o->user, &found, &dangling);
         if (found.n > 1)
                 qsort(found.v, found.n, sizeof(char *), cmp_str);
 
@@ -919,27 +921,42 @@ int main(int argc, char **argv) {
                 .config = "/bedrock/etc/global-units.conf",
                 .strata_root = "/bedrock/strata",
         };
+        int config_explicit = 0;
+
+        /* Scope must be known before choosing the default config. */
+        if (strstr(argv[0], "user-generators"))
+                o.user = 1;
+        const char *scope_env = getenv("SYSTEMD_SCOPE");
+        if (scope_env && strcmp(scope_env, "user") == 0)
+                o.user = 1;
 
         use_color_out = isatty(STDOUT_FILENO) && !getenv("NO_COLOR");
         use_color_err = isatty(STDERR_FILENO) && !getenv("NO_COLOR");
 
-        if (getenv("SYSTEMD_CROSS_CONFIG"))
+        if (getenv("SYSTEMD_CROSS_CONFIG")) {
                 o.config = getenv("SYSTEMD_CROSS_CONFIG");
+                config_explicit = 1;
+        }
         if (getenv("SYSTEMD_CROSS_STRATA_ROOT"))
                 o.strata_root = getenv("SYSTEMD_CROSS_STRATA_ROOT");
         if (getenv("SYSTEMD_CROSS_LOCAL"))
                 o.local = getenv("SYSTEMD_CROSS_LOCAL");
+        if (getenv("SYSTEMD_CROSS_SCOPE") && strcmp(getenv("SYSTEMD_CROSS_SCOPE"), "user") == 0)
+                o.user = 1;
 
         char **pos = xmalloc((size_t)argc * sizeof(*pos));
         int np = 0;
 
         for (int i = 1; i < argc; i++) {
-                if ((strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-c") == 0) && i + 1 < argc)
+                if ((strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-c") == 0) && i + 1 < argc) {
                         o.config = argv[++i];
-                else if (strcmp(argv[i], "--strata-root") == 0 && i + 1 < argc)
+                        config_explicit = 1;
+                } else if (strcmp(argv[i], "--strata-root") == 0 && i + 1 < argc)
                         o.strata_root = argv[++i];
                 else if (strcmp(argv[i], "--local") == 0 && i + 1 < argc)
                         o.local = argv[++i];
+                else if (strcmp(argv[i], "--user") == 0)
+                        o.user = 1;
                 else if (strcmp(argv[i], "--force") == 0)
                         o.force = 1;
                 else if (strcmp(argv[i], "--no-reload") == 0)
@@ -961,6 +978,9 @@ int main(int argc, char **argv) {
                 return 2;
         }
 
+        if (o.user && !config_explicit)
+                o.config = "/bedrock/etc/global-units.user.conf";
+
         const char *cmd = pos[0];
         char **args = pos + 1;
         int nargs = np - 1;
@@ -968,6 +988,11 @@ int main(int argc, char **argv) {
         /* systemd invokes generators with three directory arguments and no
          * subcommand; the first one is an absolute path. */
         if (cmd[0] == '/') {
+                const char *sc = getenv("SYSTEMD_SCOPE");
+                if ((sc && strcmp(sc, "user") == 0) ||
+                    strstr(cmd, "/run/user/") ||
+                    strstr(argv[0], "user-generators"))
+                        o.user = 1;
                 use_color_out = 0;
                 use_color_err = 0;
                 return cmd_generate(&o, pos, np);

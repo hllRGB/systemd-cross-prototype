@@ -21,6 +21,7 @@ struct uent {
 struct stratum_idx {
         char *name;
         char *root;
+        int user;               /* 0 = system, 1 = user manager */
         struct uent *v;
         size_t n;
 };
@@ -30,7 +31,8 @@ struct world {
         size_t n;
 };
 
-int world_init(struct world *w, const char *strata_root, const strvec *names, char **err);
+int world_init(struct world *w, const char *strata_root, const strvec *names,
+               int user, char **err);
 void world_free(struct world *w);
 struct stratum_idx *world_get(struct world *w, const char *name);
 
@@ -39,6 +41,7 @@ struct uent *sidx_find(struct stratum_idx *s, const char *name);
 /* 1 = found, 0 = masked, -1 = not found */
 int sidx_resolve(struct stratum_idx *s, const char *name, struct uent **out);
 
-const char *sidx_udir(int idx);
+int sidx_nudir(const struct stratum_idx *s);
+const char *sidx_udir(const struct stratum_idx *s, int idx);
 
 #endif

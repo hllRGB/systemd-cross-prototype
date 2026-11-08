@@ -102,6 +102,15 @@ printf 'version = 1\n\n[resolve]\ninit = alpha\norder = beta\n\n[stratum alpha]\
 [ -L "$TMP/gen-local/alpha-multi-user.target" ] || fail "local unit not aliased"
 pass "local stratum unit aliased into global namespace"
 
+# ---------------------------------------------------------------- user scope
+printf 'version = 1\n\n[resolve]\ninit = alpha\norder = beta\n\n[stratum alpha]\nunits = user-local.service\n\n[stratum beta]\nunits = user-foreign.service\n' > "$TMP/user.conf"
+"$BIN" --user --config "$TMP/user.conf" --strata-root "$FIX" generate "$TMP/gen-user" >/dev/null || fail "user generate"
+[ -L "$TMP/gen-user/alpha-user-local.service" ] || fail "user local alias missing"
+grep -q '^ExecStart=/bedrock/bin/strat -r beta /usr/bin/ufoo --user$' "$TMP/gen-user/beta-user-foreign.service" || fail "user exec not wrapped"
+grep -q '^Requires=beta-user-dep.service$' "$TMP/gen-user/beta-user-foreign.service" || fail "user dependency not renamed"
+[ -f "$TMP/gen-user/beta-user-dep.service" ] || fail "user closure missing"
+pass "user scope"
+
 # ---------------------------------------------------------------- shell CLI
 SYSTEMD_CROSS_BIN="$PWD/systemd-cross" sh cli/brl-systemd \
 	--config "$TMP/test.conf" --strata-root "$FIX" list > "$TMP/cli-list" || fail "cli list"

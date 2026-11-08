@@ -211,6 +211,16 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
         for (size_t i = 0; i < p.n; i++) {
                 struct out_unit *u = &p.v[i];
                 char *path = path_concat(outdir, u->out);
+                if (u->alias_path) {
+                        unlink(path);
+                        if (symlink(u->alias_path, path) < 0) {
+                                fprintf(stderr, "error: cannot link %s -> %s\n", path, u->alias_path);
+                                free(path);
+                                return 1;
+                        }
+                        free(path);
+                        continue;
+                }
                 if (write_file(path, u->text) < 0) {
                         errf("cannot write %s", path);
                         free(path);
@@ -361,6 +371,8 @@ static int cmd_plan(struct opts *o) {
                 printf("explicit\t%s\t%s\n", cfg.units[i].stratum, cfg.units[i].name);
         for (size_t i = 0; i < p.n; i++) {
                 printf("unit\t%s\t%s\t%s\n", p.v[i].stratum, p.v[i].src, p.v[i].out);
+                if (p.v[i].alias_path)
+                        printf("alias\t%s\t%s\n", p.v[i].out, p.v[i].alias_path);
                 for (size_t k = 0; k < p.v[i].edges.n; k++)
                         printf("edge\t%s\t%s\n", p.v[i].out, p.v[i].edges.v[k]);
                 for (size_t k = 0; k < p.v[i].wants.n; k++)
@@ -379,6 +391,72 @@ static int cmd_plan(struct opts *o) {
         sv_free(&strata);
         plan_free(&p);
         return r < 0 ? 1 : 0;
+}
+
+static int locate_in(struct world *w, const char *stratum, const char *unit) {
+        struct stratum_idx *s = world_get(w, stratum);
+        struct uent *e = NULL;
+
+        return s && sidx_resolve(s, unit, &e) > 0;
+}
+
+static int cmd_locate(struct opts *o, const char *unit, const char *from) {
+        struct config cfg;
+        char *err = NULL;
+        if (config_load(&cfg, o->config, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                free(err);
+                return 1;
+        }
+        if (normalize_init(o, &cfg) < 0) {
+                config_free(&cfg);
+                return 1;
+        }
+
+        strvec strata = {0};
+        collect_strata(&cfg, &strata);
+        if (from && !sv_contains(&strata, from))
+                sv_push(&strata, from);
+
+        struct world w = {0};
+        if (world_init(&w, o->strata_root, &strata, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "world init failed");
+                free(err);
+                config_free(&cfg);
+                sv_free(&strata);
+                return 1;
+        }
+
+        const char *found = NULL;
+        char *alt = NULL;
+        if (!is_unit_name(unit)) {
+                alt = xasprintf("%s.service", unit);
+                unit = alt;
+        }
+        if (from) {
+                if (locate_in(&w, from, unit))
+                        found = from;
+        } else {
+                if (cfg.init && locate_in(&w, cfg.init, unit))
+                        found = cfg.init;
+                for (size_t i = 0; !found && i < cfg.order.n; i++)
+                        if (locate_in(&w, cfg.order.v[i], unit))
+                                found = cfg.order.v[i];
+                for (size_t i = 0; !found && i < strata.n; i++)
+                        if (locate_in(&w, strata.v[i], unit))
+                                found = strata.v[i];
+        }
+
+        if (found)
+                printf("unit\t%s\t%s\n", found, unit);
+        else
+                printf("missing\t%s\n", unit);
+
+        free(alt);
+        world_free(&w);
+        sv_free(&strata);
+        config_free(&cfg);
+        return found ? 0 : 1;
 }
 
 static int cmd_import_list(struct opts *o, const char *stratum) {
@@ -853,6 +931,13 @@ int main(int argc, char **argv) {
                 return cmd_tree(&o);
         if (strcmp(cmd, "check") == 0)
                 return cmd_check(&o);
+        if (strcmp(cmd, "locate") == 0) {
+                if (nargs < 1 || nargs > 2) {
+                        usage();
+                        return 2;
+                }
+                return cmd_locate(&o, args[0], nargs > 1 ? args[1] : NULL);
+        }
         if (strcmp(cmd, "plan") == 0)
                 return cmd_plan(&o);
         if (strcmp(cmd, "import-list") == 0) {

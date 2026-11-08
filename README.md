@@ -79,8 +79,10 @@ Ordering keys are rewritten but do not pull units in: `After`, `Before`,
 | `[Install] WantedBy/RequiredBy` | local targets only; links emitted into `<target>.wants/` |
 | `RootDirectory=`, `RootImage=`, `DynamicUser=yes`, `PrivateUsers=yes` | fatal, unit dropped |
 
-Units are emitted under `bedrock-<stratum>-<original-name>` so that
-implicit socket/timer pairing keeps working.
+Units are emitted under `<stratum>-<original-name>` so that implicit
+socket/timer pairing keeps working. Units from the init stratum are not
+copied: they are exposed as aliases of the native unit file, so dependent
+foreign units can bind to a single global name.
 
 ## Usage
 
@@ -113,8 +115,8 @@ Options (`-c/--config`, `--strata-root`, `--local`, `--force`, `--dry-run`)
 may appear before or after the command. Defaults are
 `/bedrock/etc/global-units.conf` and `/bedrock/strata`.
 
-`import` expands `<stratum>/etc/systemd/system/*.wants` and `*.requires`.
-Target links, dangling links and `[resolve] ignore` matches are skipped.
+`import <unit>...` locates each unit (init stratum first, then `order`) and
+adds exactly those entries. `--from <stratum>` restricts the search.
 `setup` and `import` revert on analysis failure unless `--force` is given.
 
 Generator mode: the first argument is the output directory. Under

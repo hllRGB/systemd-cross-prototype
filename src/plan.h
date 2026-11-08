@@ -8,7 +8,8 @@ struct out_unit {
         char *stratum;          /* source stratum */
         char *src;              /* source unit name */
         char *out;              /* generated unit name */
-        char *text;
+        char *text;             /* rewritten unit text, NULL for local aliases */
+        char *alias_path;       /* absolute path of the native unit for local aliases */
         strvec edges;           /* human readable dependency decisions */
         strvec wants;           /* local targets to hook into via .wants */
         strvec requires;        /* local targets to hook into via .requires */

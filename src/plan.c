@@ -26,7 +26,7 @@ static void p_add(strvec *sv, const char *fmt, ...) {
 }
 
 char *plan_prefix_name(const char *stratum, const char *name) {
-        return xasprintf("bedrock-%s-%s", stratum, name);
+        return xasprintf("%s-%s", stratum, name);
 }
 
 void plan_free(struct plan *p) {
@@ -35,6 +35,7 @@ void plan_free(struct plan *p) {
                 free(p->v[i].src);
                 free(p->v[i].out);
                 free(p->v[i].text);
+                free(p->v[i].alias_path);
                 sv_free(&p->v[i].edges);
                 sv_free(&p->v[i].wants);
                 sv_free(&p->v[i].requires);
@@ -755,11 +756,6 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w) {
         strvec visited = {0};
 
         for (size_t i = 0; i < cfg->n_units; i++) {
-                if (strcmp(cfg->units[i].stratum, p->local) == 0) {
-                        p_add(&p->warns, "%s/%s: local stratum unit needs no porting",
-                              cfg->units[i].stratum, cfg->units[i].name);
-                        continue;
-                }
                 if (qn == qcap) {
                         qcap = qcap ? qcap * 2 : 8;
                         queue = xrealloc(queue, qcap * sizeof(*queue));
@@ -798,10 +794,15 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w) {
                         continue;
                 }
 
-                char *text = load_unit_text(src, e, uname);
-                if (!text) {
-                        p_add(&p->errors, "%s/%s: cannot read %s", sname, uname, e->path);
-                        continue;
+                int local_alias = strcmp(sname, p->local) == 0;
+                char *text = NULL;
+
+                if (!local_alias) {
+                        text = load_unit_text(src, e, uname);
+                        if (!text) {
+                                p_add(&p->errors, "%s/%s: cannot read %s", sname, uname, e->path);
+                                continue;
+                        }
                 }
 
                 if (p->n == p->cap) {
@@ -813,8 +814,16 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w) {
                 ou->stratum = xstrdup(sname);
                 ou->src = xstrdup(uname);
                 ou->out = plan_prefix_name(sname, uname);
-                ou->text = transform_text(p, src, uname, text, ou);
-                free(text);
+                if (local_alias) {
+                        const char *ap = e->path;
+                        size_t rl = strlen(src->root);
+                        if (strncmp(ap, src->root, rl) == 0 && ap[rl] == '/')
+                                ap += rl;
+                        ou->alias_path = xstrdup(ap);
+                } else {
+                        ou->text = transform_text(p, src, uname, text, ou);
+                        free(text);
+                }
                 p->n++;
 
                 if (strlen(ou->out) > 255)
@@ -825,8 +834,9 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w) {
                         p_add(&p->errors, "%s: generated name collides with local unit", ou->out);
 
                 /* implicit companion units: foo.timer -> foo.service, etc. */
-                if (has_suffix(uname, ".timer") || has_suffix(uname, ".path") ||
-                    has_suffix(uname, ".socket")) {
+                if (!local_alias &&
+                    (has_suffix(uname, ".timer") || has_suffix(uname, ".path") ||
+                     has_suffix(uname, ".socket"))) {
                         const char *key = has_suffix(uname, ".socket") ? "Service" : "Unit";
                         char *explicit_val = find_setting(ou->text, key);
                         int explicit_key = explicit_val != NULL;

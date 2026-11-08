@@ -20,6 +20,7 @@ local=""
 force=""
 dry=""
 endopts=""
+from=""
 
 args_file=$(mktemp)
 tmpd=""
@@ -33,7 +34,7 @@ Manages porting ${color_term}systemd${color_norm} units from other ${color_term}
 Commands:
   ${color_cmd}setup     ${color_norm}${color_sub}<stratum> <unit>${color_norm}      add an explicit port entry
   ${color_cmd}delete    ${color_norm}${color_sub}<stratum> <unit>${color_norm}      remove an explicit port entry
-  ${color_cmd}import    ${color_norm}${color_sub}<stratum>${color_norm}             add all units enabled in that ${color_term}stratum${color_norm}
+  ${color_cmd}import    ${color_norm}${color_sub}<unit>...${color_norm}               add the named unit(s), stratum auto-detected
   ${color_cmd}list      ${color_norm}                      show entries and the resolved plan
   ${color_cmd}tree      ${color_norm}                      show resolved dependency edges
   ${color_cmd}check     ${color_norm}                      analyse only, do not write
@@ -43,6 +44,7 @@ Options:
   ${color_cmd}-c, --config <path>      ${color_norm}config file (default ${color_file}/bedrock/etc/global-units.conf${color_norm})
   ${color_cmd}    --strata-root <path> ${color_norm}${color_term}strata${color_norm} root (default ${color_file}/bedrock/strata${color_norm})
   ${color_cmd}    --local <stratum>    ${color_norm}override ${color_cmd}[resolve] init${color_norm}
+  ${color_cmd}    --from <stratum>     ${color_norm}restrict ${color_cmd}import${color_norm} to one ${color_term}stratum${color_norm}
   ${color_cmd}    --force              ${color_norm}keep changes even if analysis failed
   ${color_cmd}    --dry-run            ${color_norm}preview ${color_cmd}import${color_norm} without writing
   ${color_cmd}-h, --help               ${color_norm}print this message
@@ -51,7 +53,7 @@ Examples:
   ${color_rcmd}# brl systemd import debian --dry-run
   ${color_rcmd}# brl systemd setup debian ssh.service
   ${color_cmd}\$ brl systemd list
-  ${color_strat}bedrock-debian-apt-daily.service
+  ${color_strat}debian-apt-daily.service
 ${color_norm}"
 }
 
@@ -89,6 +91,11 @@ while [ "${#}" -gt 0 ]; do
 	"--local")
 		[ "${#}" -ge 2 ] || usage_error
 		local="${2}"
+		shift 2
+		;;
+	"--from")
+		[ "${#}" -ge 2 ] || usage_error
+		from="${2}"
 		shift 2
 		;;
 	"--force")
@@ -236,10 +243,10 @@ cmd_setup() {
 	[ "${#}" -ge 2 ] || usage_error
 	s="${1}"
 	u="${2}"
-	run_plan
-	cur=$(sed -n "s/^local${tab}//p" "${plan_file}")
-	if [ "${s}" = "${cur}" ]; then
-		die "${s} is the local stratum, nothing to port"
+	if loc=$("${BIN}" locate "${u}" "${s}"); then
+		u=$(printf '%s\n' "${loc}" | cut -f3)
+	else
+		die "${s}/${u}: unit not found"
 	fi
 	"${BIN}" config-add "${s}" "${u}" || die "cannot add ${s}/${u}"
 
@@ -270,62 +277,55 @@ cmd_delete() {
 
 cmd_import() {
 	[ "${#}" -ge 1 ] || usage_error
-	s="${1}"
 
-	"${BIN}" import-list "${s}" > "${tmpd}/imp" || die "cannot list ${s}"
-	grep "^unit${tab}" "${tmpd}/imp" | cut -f2 > "${tmpd}/units"
+	loc_file="${tmpd}/located"
+	: > "${loc_file}"
+	missing=0
 
-	n=$(wc -l < "${tmpd}/units")
+	for u in "${@}"; do
+		if [ -n "${from}" ]; then
+			out=$("${BIN}" locate "${u}" "${from}")
+		else
+			out=$("${BIN}" locate "${u}")
+		fi
+		if [ "${?}" -ne 0 ]; then
+			printf "${color_alert}error:${color_norm} %s not found in any stratum\n" "${u}" >&2
+			missing=1
+		else
+			printf '%s\n' "${out}" >> "${loc_file}"
+		fi
+	done
+	[ "${missing}" -eq 0 ] || die "nothing written"
+
 	if [ "${dry}" = "1" ]; then
-		printf "${color_strat}%s${color_norm}: ${color_logo}%s${color_norm} enabled unit(s) (dry run, not saved)\n" \
-			"${s}" "${n}"
-		while IFS= read -r u; do
-			printf "  %s\n" "${u}"
-		done < "${tmpd}/units"
-		show_import_skipped
+		printf "${color_logo}import (dry run, not saved):${color_norm}\n"
+		while IFS="${tab}" read -r _ s u; do
+			printf "  ${color_strat}%s${color_norm}/%s\n" "${s}" "${u}"
+		done < "${loc_file}"
 		return 0
 	fi
 
-	run_plan
-	grep "^explicit${tab}" "${plan_file}" | awk -F'\t' -v s="${s}" '$2 == s { print $3 }' |
-		sort > "${tmpd}/before"
-	sort "${tmpd}/units" > "${tmpd}/sorted"
-	comm -23 "${tmpd}/sorted" "${tmpd}/before" > "${tmpd}/new"
-
-	"${BIN}" config-add-many "${s}" < "${tmpd}/new" || die "cannot update config"
+	while IFS="${tab}" read -r _ s u; do
+		"${BIN}" config-add "${s}" "${u}" || die "cannot add ${s}/${u}"
+	done < "${loc_file}"
 
 	run_plan
 	if [ "$(plan_status)" != "ok" ] && [ -z "${force}" ]; then
-		while IFS= read -r u; do
+		while IFS="${tab}" read -r _ s u; do
 			"${BIN}" config-del "${s}" "${u}" >/dev/null 2>&1
-		done < "${tmpd}/new"
+		done < "${loc_file}"
 		show_errors
 		die "analysis failed, import reverted"
 	fi
 
-	printf "${color_strat}%s${color_norm}: ${color_logo}%s${color_norm} enabled unit(s), ${color_logo}%s${color_norm} new\n" \
-		"${s}" "${n}" "$(wc -l < "${tmpd}/new")"
-	show_import_skipped
+	printf "${color_logo}imported:${color_norm}\n"
+	while IFS="${tab}" read -r _ s u; do
+		printf "  ${color_strat}%s${color_norm}/%s\n" "${s}" "${u}"
+	done < "${loc_file}"
 	show_list
 	show_warns
 	show_errors
 	return 0
-}
-
-show_import_skipped() {
-	for kind in target dangling ignored; do
-		c=$(grep -c "^${kind}${tab}" "${tmpd}/imp" || true)
-		[ "${c}" -gt 0 ] || continue
-		case "${kind}" in
-		"target") why="targets are never ported" ;;
-		"dangling") why="no unit file in the source stratum" ;;
-		"ignored") why="matches [resolve] ignore" ;;
-		esac
-		printf "${color_warn}skipped %s %s link(s): %s${color_norm}\n" "${c}" "${kind}" "${why}"
-		grep "^${kind}${tab}" "${tmpd}/imp" | cut -f2 | while IFS= read -r u; do
-			printf "  %s\n" "${u}"
-		done
-	done
 }
 
 case "${cmd}" in

@@ -1,0 +1,5 @@
+[Unit]
+Description=Masked Unit
+
+[Service]
+ExecStart=/usr/bin/foo

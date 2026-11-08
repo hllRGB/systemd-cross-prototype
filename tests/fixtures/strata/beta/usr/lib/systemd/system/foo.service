@@ -1,0 +1,15 @@
+[Unit]
+Description=Foo Daemon
+Requires=bar.service
+After=network-online.target
+ConditionPathExists=/etc/foo.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/foo --daemon
+ExecStartPre=-/usr/bin/foo --check
+EnvironmentFile=/etc/foo.conf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

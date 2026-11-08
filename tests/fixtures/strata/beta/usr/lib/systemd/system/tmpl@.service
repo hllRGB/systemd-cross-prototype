@@ -1,0 +1,5 @@
+[Unit]
+Description=Template Unit
+
+[Service]
+ExecStart=/usr/bin/foo %i

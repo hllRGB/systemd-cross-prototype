@@ -1,0 +1,10 @@
+[Unit]
+Description=Bar Daemon
+After=foo.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bar
+
+[Install]
+WantedBy=multi-user.target

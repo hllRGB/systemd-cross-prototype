@@ -3,6 +3,7 @@
 #include "index.h"
 #include "plan.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -16,6 +17,7 @@ struct opts {
         const char *local;
         int force;
         int no_reload;
+        int dry;
 };
 
 static void usage(void) {
@@ -25,6 +27,7 @@ static void usage(void) {
                 "commands:\n"
                 "  setup <stratum> <unit>   add an explicit port entry to the config\n"
                 "  delete <stratum> <unit>  remove an explicit port entry\n"
+                "  import <stratum>         add all units enabled in that stratum\n"
                 "  list                     show configured units and their plan status\n"
                 "  tree                     show resolved dependency edges\n"
                 "  check                    analyse only, no writes\n"
@@ -34,7 +37,8 @@ static void usage(void) {
                 "  --config <path>       config file (default /bedrock/etc/global-units.conf)\n"
                 "  --strata-root <path>  strata root (default /bedrock/strata)\n"
                 "  --local <stratum>     override [resolve] init\n"
-                "  --force               save even if analysis failed\n");
+                "  --force               save even if analysis failed\n"
+                "  --dry-run             print what import would add, do not write\n");
 }
 
 static void collect_strata(const struct config *cfg, strvec *out) {
@@ -74,14 +78,13 @@ static char *detect_init_stratum(const char *strata_root) {
         return name;
 }
 
-static int analyse(struct opts *o, struct config *cfg, struct plan *p,
-                   struct world *w, strvec *strata) {
-        memset(p, 0, sizeof *p);
-
+static int normalize_init(struct opts *o, struct config *cfg) {
         if (o->local) {
                 free(cfg->init);
                 cfg->init = xstrdup(o->local);
-        } else if (cfg->init && strcmp(cfg->init, "auto") == 0) {
+                return 0;
+        }
+        if (cfg->init && strcmp(cfg->init, "auto") == 0) {
                 char *d = detect_init_stratum(o->strata_root);
                 if (!d) {
                         fprintf(stderr, "error: cannot detect init stratum\n");
@@ -90,6 +93,15 @@ static int analyse(struct opts *o, struct config *cfg, struct plan *p,
                 free(cfg->init);
                 cfg->init = d;
         }
+        return 0;
+}
+
+static int analyse(struct opts *o, struct config *cfg, struct plan *p,
+                   struct world *w, strvec *strata) {
+        memset(p, 0, sizeof *p);
+
+        if (normalize_init(o, cfg) < 0)
+                return -1;
 
         collect_strata(cfg, strata);
         char *err = NULL;
@@ -355,6 +367,144 @@ static int cmd_setup(struct opts *o, char **args, int nargs) {
         return 0;
 }
 
+static int cmp_str(const void *a, const void *b) {
+        return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+static void collect_enabled(const char *strata_root, const char *stratum,
+                            strvec *out, strvec *skipped_targets) {
+        char *base = path_abs(strata_root);
+        char *dir = xasprintf("%s/%s/etc/systemd/system", base, stratum);
+        free(base);
+
+        DIR *dp = opendir(dir);
+        if (!dp) {
+                free(dir);
+                return;
+        }
+
+        struct dirent *de;
+        while ((de = readdir(dp))) {
+                if (de->d_name[0] == '.')
+                        continue;
+                if (!has_suffix(de->d_name, ".wants") && !has_suffix(de->d_name, ".requires"))
+                        continue;
+
+                char *wd = path_concat(dir, de->d_name);
+                DIR *dp2 = opendir(wd);
+                if (!dp2) {
+                        free(wd);
+                        continue;
+                }
+                struct dirent *e;
+                while ((e = readdir(dp2))) {
+                        if (e->d_name[0] == '.')
+                                continue;
+                        if (!is_unit_name(e->d_name))
+                                continue;
+                        if (has_suffix(e->d_name, ".target")) {
+                                if (!sv_contains(skipped_targets, e->d_name))
+                                        sv_push(skipped_targets, e->d_name);
+                                continue;
+                        }
+                        if (!sv_contains(out, e->d_name))
+                                sv_push(out, e->d_name);
+                }
+                closedir(dp2);
+                free(wd);
+        }
+        closedir(dp);
+        free(dir);
+}
+
+static int cmd_import(struct opts *o, char **args, int nargs) {
+        if (nargs < 1) {
+                usage();
+                return 2;
+        }
+        const char *stratum = args[0];
+
+        struct config cfg;
+        char *err = NULL;
+        if (config_load(&cfg, o->config, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                free(err);
+                return 1;
+        }
+        if (normalize_init(o, &cfg) < 0) {
+                config_free(&cfg);
+                return 1;
+        }
+        if (!cfg.init || !*cfg.init) {
+                fprintf(stderr, "error: [resolve] init is not set\n");
+                config_free(&cfg);
+                return 1;
+        }
+        if (strcmp(stratum, cfg.init) == 0) {
+                fprintf(stderr, "error: %s is the local stratum, nothing to import\n", stratum);
+                config_free(&cfg);
+                return 1;
+        }
+
+        strvec found = {0}, targets = {0};
+        collect_enabled(o->strata_root, stratum, &found, &targets);
+        if (found.n > 1)
+                qsort(found.v, found.n, sizeof(char *), cmp_str);
+
+        size_t before = cfg.n_units;
+        for (size_t i = 0; i < found.n; i++)
+                config_add(&cfg, stratum, found.v[i]);
+        size_t added = cfg.n_units - before;
+
+        struct world w = {0};
+        struct plan p;
+        strvec strata = {0};
+        int r = analyse(o, &cfg, &p, &w, &strata);
+
+        if (r < 0 && !o->force) {
+                fprintf(stderr, "error: analysis failed, config not saved\n");
+                config_free(&cfg);
+                world_free(&w);
+                sv_free(&strata);
+                plan_free(&p);
+                sv_free(&found);
+                sv_free(&targets);
+                return 1;
+        }
+
+        if (!o->dry && config_save(&cfg) < 0) {
+                fprintf(stderr, "error: cannot save %s\n", o->config);
+                config_free(&cfg);
+                world_free(&w);
+                sv_free(&strata);
+                plan_free(&p);
+                sv_free(&found);
+                sv_free(&targets);
+                return 1;
+        }
+
+        printf("%s: %zu enabled unit%s found, %zu new entr%s%s\n",
+               stratum, found.n, found.n == 1 ? "" : "s",
+               added, added == 1 ? "y" : "ies",
+               o->dry ? " (dry run, not saved)" : "");
+        for (size_t i = 0; i < found.n; i++)
+                printf("  %s\n", found.v[i]);
+        if (targets.n) {
+                printf("skipped %zu target link%s (targets are never ported):\n",
+                       targets.n, targets.n == 1 ? "" : "s");
+                for (size_t i = 0; i < targets.n; i++)
+                        printf("  %s\n", targets.v[i]);
+        }
+
+        config_free(&cfg);
+        world_free(&w);
+        sv_free(&strata);
+        plan_free(&p);
+        sv_free(&found);
+        sv_free(&targets);
+        return 0;
+}
+
 static int cmd_delete(struct opts *o, char **args, int nargs) {
         if (nargs < 2) {
                 usage();
@@ -402,6 +552,8 @@ int main(int argc, char **argv) {
                         o.force = 1;
                 else if (strcmp(argv[i], "--no-reload") == 0)
                         o.no_reload = 1;
+                else if (strcmp(argv[i], "--dry-run") == 0)
+                        o.dry = 1;
                 else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
                         usage();
                         return 0;
@@ -436,6 +588,8 @@ int main(int argc, char **argv) {
                 return cmd_check(&o);
         if (strcmp(cmd, "setup") == 0)
                 return cmd_setup(&o, args, nargs);
+        if (strcmp(cmd, "import") == 0)
+                return cmd_import(&o, args, nargs);
         if (strcmp(cmd, "delete") == 0)
                 return cmd_delete(&o, args, nargs);
 

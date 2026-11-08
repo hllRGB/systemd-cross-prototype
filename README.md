@@ -97,6 +97,19 @@ make
 `/bedrock/strata`. `--config` defaults to
 `/bedrock/etc/global-units.conf`.
 
+Editing the whitelist:
+
+```sh
+./systemd-cross setup  debian ssh.service
+./systemd-cross delete debian ssh.service
+./systemd-cross import debian --dry-run   # expand *.wants/*.requires into entries
+./systemd-cross import debian
+```
+
+`import` reads `<stratum>/etc/systemd/system/*.wants` and `*.requires` and adds
+every linked unit as an explicit entry. Target links are skipped: targets are
+never ported.
+
 Generator mode: the first argument is the output directory. Under
 systemd the generator is invoked with three directories; only the first
 is used.

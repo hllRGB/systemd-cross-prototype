@@ -86,4 +86,13 @@ pass "setup/delete roundtrip"
 [ -f "$TMP/gen-direct/bedrock-beta-foo.service" ] || fail "generator invocation produced nothing"
 pass "generator invocation"
 
+# ---------------------------------------------------------------- import
+printf 'version = 1\n\n[resolve]\ninit = alpha\norder = beta\n' > "$TMP/import.conf"
+"$BIN" --config "$TMP/import.conf" --strata-root "$FIX" import beta >/dev/null || fail "import"
+grep -q 'units = foo.service' "$TMP/import.conf" || fail "import did not add enabled unit"
+if grep -q 'units = extra.target' "$TMP/import.conf"; then
+        fail "import added a target"
+fi
+pass "import enabled units"
+
 echo "all tests passed"

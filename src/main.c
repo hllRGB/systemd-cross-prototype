@@ -392,6 +392,11 @@ int main(int argc, char **argv) {
         char **args = argv + i;
         int nargs = argc - i;
 
+        /* systemd invokes generators with three directory arguments and no
+         * subcommand; the first one is an absolute path. */
+        if (cmd[0] == '/')
+                return cmd_generate(&o, argv + i - 1, nargs + 1);
+
         if (strcmp(cmd, "generate") == 0)
                 return cmd_generate(&o, args, nargs);
         if (strcmp(cmd, "list") == 0)

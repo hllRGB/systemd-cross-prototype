@@ -31,8 +31,8 @@ grep -q '^Requires=beta-bar.service$' "$TMP/gen/beta-foo.service" || fail "depen
 grep -q '^After=network-online.target$' "$TMP/gen/beta-foo.service" || fail "local ordering dep changed"
 pass "dependency rewrite"
 
-grep -q '^ExecStart=/bedrock/bin/strat -r beta /usr/bin/foo --daemon$' "$TMP/gen/beta-foo.service" || fail "ExecStart not wrapped"
-grep -q '^ExecStartPre=-/bedrock/bin/strat -r beta /usr/bin/foo --check$' "$TMP/gen/beta-foo.service" || fail "ExecStart prefix handling"
+grep -q '^ExecStart=/bedrock/bin/strat beta /usr/bin/foo --daemon$' "$TMP/gen/beta-foo.service" || fail "ExecStart not wrapped"
+grep -q '^ExecStartPre=-/bedrock/bin/strat beta /usr/bin/foo --check$' "$TMP/gen/beta-foo.service" || fail "ExecStart prefix handling"
 pass "exec rewrite"
 
 grep -q "^EnvironmentFile=.*$FIX/beta/etc/foo.conf$" "$TMP/gen/beta-foo.service" || fail "EnvironmentFile not qualified"
@@ -57,7 +57,7 @@ pass "alias within stratum root"
 
 printf 'version = 1\n\n[resolve]\ninit = alpha\norder = beta\n\n[stratum beta]\nunits = tmpl@one.service\n' > "$TMP/tmpl.conf"
 "$BIN" --config "$TMP/tmpl.conf" --strata-root "$FIX" generate "$TMP/gen-tmpl" >/dev/null || fail "template generate"
-grep -q '^ExecStart=/bedrock/bin/strat -r beta /usr/bin/foo %i$' "$TMP/gen-tmpl/beta-tmpl@one.service" || fail "template fallback failed"
+grep -q '^ExecStart=/bedrock/bin/strat beta /usr/bin/foo %i$' "$TMP/gen-tmpl/beta-tmpl@one.service" || fail "template fallback failed"
 pass "template instance"
 
 # ---------------------------------------------------------------- offline verify
@@ -96,17 +96,26 @@ if grep -q 'units = bar.service' "$TMP/import.conf"; then
 fi
 pass "import explicit unit only"
 
-# ---------------------------------------------------------------- local alias
-printf 'version = 1\n\n[resolve]\ninit = alpha\norder = beta\n\n[stratum alpha]\nunits = multi-user.target\n' > "$TMP/local.conf"
-"$BIN" --config "$TMP/local.conf" --strata-root "$FIX" generate "$TMP/gen-local" >/dev/null || fail "local generate"
-[ -L "$TMP/gen-local/alpha-multi-user.target" ] || fail "local unit not aliased"
-pass "local stratum unit aliased into global namespace"
+# ---------------------------------------------------------------- local stratum
+printf 'version = 1\n\n[resolve]\ninit = alpha\norder = beta\n\n[stratum alpha]\nunits = user-local.service\n' > "$TMP/local.conf"
+"$BIN" --user --config "$TMP/local.conf" --strata-root "$FIX" generate "$TMP/gen-local" >/dev/null || fail "local generate"
+[ -f "$TMP/gen-local/alpha-user-local.service" ] || fail "local unit not generated"
+grep -q '^ExecStart=/bedrock/bin/strat alpha /usr/bin/true$' "$TMP/gen-local/alpha-user-local.service" || fail "local unit not wrapped"
+pass "local stratum unit wrapped with strat"
+
+printf 'version = 1\n\n[resolve]\ninit = alpha\norder = beta\n\n[stratum alpha]\nunits = local-svc.service\n' > "$TMP/local2.conf"
+"$BIN" --config "$TMP/local2.conf" --strata-root "$FIX" generate "$TMP/gen-local2" >/dev/null || fail "local install generate"
+[ -f "$TMP/gen-local2/alpha-local-svc.service" ] || fail "local service not generated"
+grep -q '^ExecStart=/bedrock/bin/strat alpha /usr/bin/local-svc$' "$TMP/gen-local2/alpha-local-svc.service" || fail "local service not wrapped"
+[ ! -e "$TMP/gen-local2/multi-user.target.wants/alpha-local-svc.service" ] || fail "local unit wired into boot"
+pass "local unit not wired into boot transaction"
 
 # ---------------------------------------------------------------- user scope
 printf 'version = 1\n\n[resolve]\ninit = alpha\norder = beta\n\n[stratum alpha]\nunits = user-local.service\n\n[stratum beta]\nunits = user-foreign.service\n' > "$TMP/user.conf"
 "$BIN" --user --config "$TMP/user.conf" --strata-root "$FIX" generate "$TMP/gen-user" >/dev/null || fail "user generate"
-[ -L "$TMP/gen-user/alpha-user-local.service" ] || fail "user local alias missing"
-grep -q '^ExecStart=/bedrock/bin/strat -r beta /usr/bin/ufoo --user$' "$TMP/gen-user/beta-user-foreign.service" || fail "user exec not wrapped"
+[ -f "$TMP/gen-user/alpha-user-local.service" ] || fail "user local unit missing"
+grep -q '^ExecStart=/bedrock/bin/strat alpha /usr/bin/true$' "$TMP/gen-user/alpha-user-local.service" || fail "user local unit not wrapped"
+grep -q '^ExecStart=/bedrock/bin/strat beta /usr/bin/ufoo --user$' "$TMP/gen-user/beta-user-foreign.service" || fail "user exec not wrapped"
 grep -q '^Requires=beta-user-dep.service$' "$TMP/gen-user/beta-user-foreign.service" || fail "user dependency not renamed"
 [ -f "$TMP/gen-user/beta-user-dep.service" ] || fail "user closure missing"
 pass "user scope"

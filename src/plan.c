@@ -359,7 +359,7 @@ static char *wrap_exec(struct plan *p, struct stratum_idx *src, const char *name
 
         sbuf b = {0};
         sb_add(&b, prefixes);
-        sb_addf(&b, "/bedrock/bin/strat -r %s %s", src->name, rest);
+        sb_addf(&b, "/bedrock/bin/strat %s %s", src->name, rest);
         return sb_steal(&b);
 }
 
@@ -487,6 +487,14 @@ static char *rewrite_single_dep(struct plan *p, struct stratum_idx *src, const c
 static void rewrite_install_list(struct plan *p, struct stratum_idx *src, const char *name,
                                  const char *key, const char *value, struct out_unit *ou,
                                  sbuf *out, int require) {
+        /* Units of the local stratum already exist natively.  Never wire their
+         * copies into the boot transaction, or every local service would run
+         * twice.  The [Install] stanza is kept verbatim for manual enabling. */
+        if (strcmp(src->name, p->local) == 0) {
+                sb_add(out, value);
+                return;
+        }
+
         char *copy = xstrdup(value);
         char *save = NULL;
         int first = 1;
@@ -795,15 +803,10 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
                         continue;
                 }
 
-                int local_alias = strcmp(sname, p->local) == 0;
-                char *text = NULL;
-
-                if (!local_alias) {
-                        text = load_unit_text(src, e, uname);
-                        if (!text) {
-                                p_add(&p->errors, "%s/%s: cannot read %s", sname, uname, e->path);
-                                continue;
-                        }
+                char *text = load_unit_text(src, e, uname);
+                if (!text) {
+                        p_add(&p->errors, "%s/%s: cannot read %s", sname, uname, e->path);
+                        continue;
                 }
 
                 if (p->n == p->cap) {
@@ -815,16 +818,8 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
                 ou->stratum = xstrdup(sname);
                 ou->src = xstrdup(uname);
                 ou->out = plan_prefix_name(sname, uname);
-                if (local_alias) {
-                        const char *ap = e->path;
-                        size_t rl = strlen(src->root);
-                        if (strncmp(ap, src->root, rl) == 0 && ap[rl] == '/')
-                                ap += rl;
-                        ou->alias_path = xstrdup(ap);
-                } else {
-                        ou->text = transform_text(p, src, uname, text, ou);
-                        free(text);
-                }
+                ou->text = transform_text(p, src, uname, text, ou);
+                free(text);
                 p->n++;
 
                 if (strlen(ou->out) > 255)
@@ -835,9 +830,8 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
                         p_add(&p->errors, "%s: generated name collides with local unit", ou->out);
 
                 /* implicit companion units: foo.timer -> foo.service, etc. */
-                if (!local_alias &&
-                    (has_suffix(uname, ".timer") || has_suffix(uname, ".path") ||
-                     has_suffix(uname, ".socket"))) {
+                if (has_suffix(uname, ".timer") || has_suffix(uname, ".path") ||
+                    has_suffix(uname, ".socket")) {
                         const char *key = has_suffix(uname, ".socket") ? "Service" : "Unit";
                         char *explicit_val = find_setting(ou->text, key);
                         int explicit_key = explicit_val != NULL;

@@ -72,17 +72,19 @@ Ordering keys are rewritten but do not pull units in: `After`, `Before`,
 
 | Directive | Action |
 |---|---|
-| `ExecStart*`, `ExecStop*`, `ExecReload*`, `ExecCondition` | prefix `/bedrock/bin/strat -r <stratum>` |
+| `ExecStart*`, `ExecStop*`, `ExecReload*`, `ExecCondition` | prefix `/bedrock/bin/strat <stratum>` |
 | dependency lists | provider-resolved, foreign names prefixed |
 | `EnvironmentFile=` | absolute paths qualified with the stratum root |
 | `Description=` | prefixed with `[<stratum>] ` |
-| `[Install] WantedBy/RequiredBy` | local targets only; links emitted into `<target>.wants/` |
+| `[Install] WantedBy/RequiredBy` | local targets only; links emitted into `<target>.wants/` (foreign strata only) |
 | `RootDirectory=`, `RootImage=`, `DynamicUser=yes`, `PrivateUsers=yes` | fatal, unit dropped |
 
 Units are emitted under `<stratum>-<original-name>` so that implicit
-socket/timer pairing keeps working. Units from the init stratum are not
-copied: they are exposed as aliases of the native unit file, so dependent
-foreign units can bind to a single global name.
+socket/timer pairing keeps working. Every unit, including those from the init
+stratum, is rewritten and wrapped in `strat`, so the global name carries the
+provider stratum explicitly. Units from the init stratum keep their `[Install]`
+stanza but get no wants/requires links: the native unit already covers boot,
+and linking the copy would start the service twice.
 
 ## Usage
 
@@ -164,7 +166,7 @@ relying on any stratum-private `/usr/local/lib`.
 - search roots per stratum: `etc/systemd/user`, `usr/local/share/systemd/user`,
   `usr/share/systemd/user`, `usr/local/lib/systemd/user`, `usr/lib/systemd/user`
 - default config: `/bedrock/etc/global-units.user.conf`
-- local-stratum user units are exposed as aliases in the user namespace
+- local-stratum user units are rewritten and wrapped like any other
 
 Deployment uses a user generator directory and an environment variable
 delivered to `systemd --user` through PAM:

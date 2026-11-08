@@ -1,0 +1,8 @@
+[Unit]
+Description=Local Service
+
+[Service]
+ExecStart=/usr/bin/local-svc
+
+[Install]
+WantedBy=multi-user.target

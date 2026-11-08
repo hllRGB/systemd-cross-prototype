@@ -1,6 +1,6 @@
-CC ?= cc
+CC = clang
 CFLAGS ?= -O2 -g -std=c11 -Wall -Wextra -Wno-unused-parameter
-LDFLAGS ?= -static
+LDFLAGS ?= -static -fuse-ld=lld
 CPPFLAGS ?= -Isrc
 
 SRC = src/util.c src/config.c src/index.c src/plan.c src/main.c

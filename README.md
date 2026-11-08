@@ -89,7 +89,8 @@ foreign units can bind to a single global name.
 Two layers:
 
 - `systemd-cross` — static C backend. Machine-readable commands:
-  `plan`, `import-list <stratum>`, `config-add`, `config-del`,
+  `plan`, `units [stratum]`, `locate <unit> [stratum]`,
+  `import-list <stratum>`, `config-add`, `config-del`,
   `config-add-many` and `generate`. Output is tab separated.
 - `cli/brl-systemd` — busybox sh user interface, installed as
   `brl systemd`. Formatting and colours come from

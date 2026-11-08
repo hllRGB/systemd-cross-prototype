@@ -400,6 +400,56 @@ static int locate_in(struct world *w, const char *stratum, const char *unit) {
         return s && sidx_resolve(s, unit, &e) > 0;
 }
 
+static int cmd_units(struct opts *o, const char *stratum) {
+        struct config cfg;
+        char *err = NULL;
+        if (config_load(&cfg, o->config, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                free(err);
+                return 1;
+        }
+        if (normalize_init(o, &cfg) < 0) {
+                config_free(&cfg);
+                return 1;
+        }
+
+        strvec strata = {0};
+        if (stratum)
+                sv_push(&strata, stratum);
+        else
+                collect_strata(&cfg, &strata);
+
+        struct world w = {0};
+        if (world_init(&w, o->strata_root, &strata, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "world init failed");
+                free(err);
+                config_free(&cfg);
+                sv_free(&strata);
+                return 1;
+        }
+
+        strvec names = {0};
+        for (size_t i = 0; i < w.n; i++)
+                for (size_t k = 0; k < w.v[i].n; k++) {
+                        struct uent *e = &w.v[i].v[k];
+                        if (e->kind == EK_MASKED)
+                                continue;
+                        if (!sv_contains(&names, e->name))
+                                sv_push(&names, e->name);
+                }
+
+        if (names.n > 1)
+                qsort(names.v, names.n, sizeof(char *), cmp_str);
+        for (size_t i = 0; i < names.n; i++)
+                printf("%s\n", names.v[i]);
+
+        sv_free(&names);
+        world_free(&w);
+        sv_free(&strata);
+        config_free(&cfg);
+        return 0;
+}
+
 static int cmd_locate(struct opts *o, const char *unit, const char *from) {
         struct config cfg;
         char *err = NULL;
@@ -884,7 +934,7 @@ int main(int argc, char **argv) {
         int np = 0;
 
         for (int i = 1; i < argc; i++) {
-                if (strcmp(argv[i], "--config") == 0 && i + 1 < argc)
+                if ((strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-c") == 0) && i + 1 < argc)
                         o.config = argv[++i];
                 else if (strcmp(argv[i], "--strata-root") == 0 && i + 1 < argc)
                         o.strata_root = argv[++i];
@@ -931,6 +981,8 @@ int main(int argc, char **argv) {
                 return cmd_tree(&o);
         if (strcmp(cmd, "check") == 0)
                 return cmd_check(&o);
+        if (strcmp(cmd, "units") == 0)
+                return cmd_units(&o, nargs > 0 ? args[0] : NULL);
         if (strcmp(cmd, "locate") == 0) {
                 if (nargs < 1 || nargs > 2) {
                         usage();

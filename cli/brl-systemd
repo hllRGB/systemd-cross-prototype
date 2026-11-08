@@ -1,0 +1,344 @@
+#!/bedrock/libexec/busybox sh
+#
+# brl systemd
+#
+#      This program is free software; you can redistribute it and/or
+#      modify it under the terms of the GNU General Public License
+#      version 2 as published by the Free Software Foundation.
+#
+# Manages porting systemd units from other strata into the init stratum.
+
+. /bedrock/share/common-code
+
+set +e
+
+BIN=${SYSTEMD_CROSS_BIN:-/bedrock/libexec/systemd-cross}
+
+config=""
+strata=""
+local=""
+force=""
+dry=""
+endopts=""
+
+args_file=$(mktemp)
+tmpd=""
+trap 'rm -f "${args_file}"; if [ -n "${tmpd}" ]; then rm -rf "${tmpd}"; fi' EXIT
+
+print_help() {
+	printf "Usage: ${color_cmd}brl systemd ${color_sub}[options] <command> [arguments]${color_norm}
+
+Manages porting ${color_term}systemd${color_norm} units from other ${color_term}strata${color_norm} into the ${color_term}init${color_norm} ${color_term}stratum${color_norm}.
+
+Commands:
+  ${color_cmd}setup     ${color_norm}${color_sub}<stratum> <unit>${color_norm}      add an explicit port entry
+  ${color_cmd}delete    ${color_norm}${color_sub}<stratum> <unit>${color_norm}      remove an explicit port entry
+  ${color_cmd}import    ${color_norm}${color_sub}<stratum>${color_norm}             add all units enabled in that ${color_term}stratum${color_norm}
+  ${color_cmd}list      ${color_norm}                      show entries and the resolved plan
+  ${color_cmd}tree      ${color_norm}                      show resolved dependency edges
+  ${color_cmd}check     ${color_norm}                      analyse only, do not write
+  ${color_cmd}generate  ${color_norm}${color_sub}<dir>${color_norm}                 generator mode (used by ${color_term}systemd${color_norm})
+
+Options:
+  ${color_cmd}-c, --config <path>      ${color_norm}config file (default ${color_file}/bedrock/etc/global-units.conf${color_norm})
+  ${color_cmd}    --strata-root <path> ${color_norm}${color_term}strata${color_norm} root (default ${color_file}/bedrock/strata${color_norm})
+  ${color_cmd}    --local <stratum>    ${color_norm}override ${color_cmd}[resolve] init${color_norm}
+  ${color_cmd}    --force              ${color_norm}keep changes even if analysis failed
+  ${color_cmd}    --dry-run            ${color_norm}preview ${color_cmd}import${color_norm} without writing
+  ${color_cmd}-h, --help               ${color_norm}print this message
+
+Examples:
+  ${color_rcmd}# brl systemd import debian --dry-run
+  ${color_rcmd}# brl systemd setup debian ssh.service
+  ${color_cmd}\$ brl systemd list
+  ${color_strat}bedrock-debian-apt-daily.service
+${color_norm}"
+}
+
+die() {
+	printf "${color_alert}error:${color_norm} %s\n" "$*" >&2
+	exit 1
+}
+
+usage_error() {
+	print_help >&2
+	exit 2
+}
+
+while [ "${#}" -gt 0 ]; do
+	if [ "${endopts}" = "1" ]; then
+		printf '%s\n' "${1}" >> "${args_file}"
+		shift
+		continue
+	fi
+	case "${1}" in
+	"-h" | "--help")
+		print_help
+		exit_success
+		;;
+	"-c" | "--config")
+		[ "${#}" -ge 2 ] || usage_error
+		config="${2}"
+		shift 2
+		;;
+	"--strata-root")
+		[ "${#}" -ge 2 ] || usage_error
+		strata="${2}"
+		shift 2
+		;;
+	"--local")
+		[ "${#}" -ge 2 ] || usage_error
+		local="${2}"
+		shift 2
+		;;
+	"--force")
+		force=1
+		shift
+		;;
+	"--dry-run")
+		dry=1
+		shift
+		;;
+	"--")
+		endopts=1
+		shift
+		;;
+	-*)
+		die "unknown option ${1}"
+		;;
+	*)
+		printf '%s\n' "${1}" >> "${args_file}"
+		shift
+		;;
+	esac
+done
+
+set --
+while IFS= read -r a; do
+	set -- "${@}" "${a}"
+done < "${args_file}"
+rm -f "${args_file}"
+
+if [ "${#}" -eq 0 ]; then
+	print_help
+	exit_success
+fi
+
+cmd="${1}"
+shift
+
+SYSTEMD_CROSS_CONFIG="${config:-${SYSTEMD_CROSS_CONFIG:-/bedrock/etc/global-units.conf}}"
+SYSTEMD_CROSS_STRATA_ROOT="${strata:-${SYSTEMD_CROSS_STRATA_ROOT:-/bedrock/strata}}"
+export SYSTEMD_CROSS_CONFIG SYSTEMD_CROSS_STRATA_ROOT
+if [ -n "${local}" ]; then
+	SYSTEMD_CROSS_LOCAL="${local}"
+	export SYSTEMD_CROSS_LOCAL
+else
+	unset SYSTEMD_CROSS_LOCAL
+fi
+
+tab=$(printf '\t')
+tmpd=$(mktemp -d)
+plan_file="${tmpd}/plan"
+
+run_plan() {
+	"${BIN}" plan > "${plan_file}"
+	return $?
+}
+
+plan_status() {
+	sed -n "s/^status${tab}//p" "${plan_file}"
+}
+
+show_errors() {
+	grep "^error${tab}" "${plan_file}" | cut -f2- |
+		while IFS= read -r m; do
+			printf "${color_alert}error:${color_norm} %s\n" "${m}"
+		done
+}
+
+show_warns() {
+	grep "^warn${tab}" "${plan_file}" | cut -f2- |
+		while IFS= read -r m; do
+			printf "${color_warn}warning:${color_norm} %s\n" "${m}"
+		done
+}
+
+show_list() {
+	printf "${color_logo}local stratum:${color_norm} ${color_strat}%s${color_norm}\n" \
+		"$(sed -n "s/^local${tab}//p" "${plan_file}")"
+	printf "\n${color_logo}explicit entries:${color_norm}\n"
+	grep "^explicit${tab}" "${plan_file}" | while IFS="${tab}" read -r _ s u; do
+		printf "  ${color_strat}%s${color_norm}/%s\n" "${s}" "${u}"
+	done
+
+	n=$(grep -c "^unit${tab}" "${plan_file}" || true)
+	printf "\n${color_logo}plan (%s unit%s):${color_norm}\n" "${n}" \
+		"$([ "${n}" -eq 1 ] || echo s)"
+	grep "^unit${tab}" "${plan_file}" | while IFS="${tab}" read -r _ s src out; do
+		printf "  ${color_strat}%s${color_norm}/%s ${color_logo}->${color_norm} ${color_okay}%s${color_norm}\n" \
+			"${s}" "${src}" "${out}"
+	done
+}
+
+show_tree() {
+	grep -E "^(unit|edge|link)${tab}" "${plan_file}" |
+		while IFS="${tab}" read -r tag a b c; do
+			case "${tag}" in
+			"unit")
+				printf "${color_logo}%s${color_norm} (%s/%s)\n" "${c}" "${a}" "${b}"
+				;;
+			"edge")
+				printf "  %s\n" "${b}"
+				;;
+			"link")
+				printf "  ${color_logo}[Install]${color_norm} -> ${color_strat}%s${color_norm}.%s\n" \
+					"${b}" "${c}"
+				;;
+			esac
+		done
+}
+
+cmd_list() {
+	run_plan
+	show_list
+	show_warns
+	if [ "$(plan_status)" = "ok" ]; then
+		return 0
+	fi
+	show_errors
+	return 1
+}
+
+cmd_tree() {
+	run_plan
+	show_tree
+	show_warns
+	if [ "$(plan_status)" = "ok" ]; then
+		return 0
+	fi
+	show_errors
+	return 1
+}
+
+cmd_check() {
+	run_plan
+	show_errors
+	show_warns
+	if [ "$(plan_status)" = "ok" ]; then
+		printf "${color_okay}ok${color_norm}: plan resolves\n"
+		return 0
+	fi
+	return 1
+}
+
+cmd_setup() {
+	[ "${#}" -ge 2 ] || usage_error
+	s="${1}"
+	u="${2}"
+	run_plan
+	cur=$(sed -n "s/^local${tab}//p" "${plan_file}")
+	if [ "${s}" = "${cur}" ]; then
+		die "${s} is the local stratum, nothing to port"
+	fi
+	"${BIN}" config-add "${s}" "${u}" || die "cannot add ${s}/${u}"
+
+	run_plan
+	if [ "$(plan_status)" != "ok" ] && [ -z "${force}" ]; then
+		"${BIN}" config-del "${s}" "${u}" >/dev/null 2>&1
+		show_errors
+		die "analysis failed, change reverted"
+	fi
+	show_list
+	show_warns
+	show_errors
+	return 0
+}
+
+cmd_delete() {
+	[ "${#}" -ge 2 ] || usage_error
+	s="${1}"
+	u="${2}"
+	"${BIN}" config-del "${s}" "${u}" || die "cannot remove ${s}/${u}"
+	printf "${color_okay}removed${color_norm} ${color_strat}%s${color_norm}/%s\n" "${s}" "${u}"
+	run_plan
+	show_list
+	show_warns
+	show_errors
+	return 0
+}
+
+cmd_import() {
+	[ "${#}" -ge 1 ] || usage_error
+	s="${1}"
+
+	"${BIN}" import-list "${s}" > "${tmpd}/imp" || die "cannot list ${s}"
+	grep "^unit${tab}" "${tmpd}/imp" | cut -f2 > "${tmpd}/units"
+
+	n=$(wc -l < "${tmpd}/units")
+	if [ "${dry}" = "1" ]; then
+		printf "${color_strat}%s${color_norm}: ${color_logo}%s${color_norm} enabled unit(s) (dry run, not saved)\n" \
+			"${s}" "${n}"
+		while IFS= read -r u; do
+			printf "  %s\n" "${u}"
+		done < "${tmpd}/units"
+		show_import_skipped
+		return 0
+	fi
+
+	run_plan
+	grep "^explicit${tab}" "${plan_file}" | awk -F'\t' -v s="${s}" '$2 == s { print $3 }' |
+		sort > "${tmpd}/before"
+	sort "${tmpd}/units" > "${tmpd}/sorted"
+	comm -23 "${tmpd}/sorted" "${tmpd}/before" > "${tmpd}/new"
+
+	"${BIN}" config-add-many "${s}" < "${tmpd}/new" || die "cannot update config"
+
+	run_plan
+	if [ "$(plan_status)" != "ok" ] && [ -z "${force}" ]; then
+		while IFS= read -r u; do
+			"${BIN}" config-del "${s}" "${u}" >/dev/null 2>&1
+		done < "${tmpd}/new"
+		show_errors
+		die "analysis failed, import reverted"
+	fi
+
+	printf "${color_strat}%s${color_norm}: ${color_logo}%s${color_norm} enabled unit(s), ${color_logo}%s${color_norm} new\n" \
+		"${s}" "${n}" "$(wc -l < "${tmpd}/new")"
+	show_import_skipped
+	show_list
+	show_warns
+	show_errors
+	return 0
+}
+
+show_import_skipped() {
+	for kind in target dangling ignored; do
+		c=$(grep -c "^${kind}${tab}" "${tmpd}/imp" || true)
+		[ "${c}" -gt 0 ] || continue
+		case "${kind}" in
+		"target") why="targets are never ported" ;;
+		"dangling") why="no unit file in the source stratum" ;;
+		"ignored") why="matches [resolve] ignore" ;;
+		esac
+		printf "${color_warn}skipped %s %s link(s): %s${color_norm}\n" "${c}" "${kind}" "${why}"
+		grep "^${kind}${tab}" "${tmpd}/imp" | cut -f2 | while IFS= read -r u; do
+			printf "  %s\n" "${u}"
+		done
+	done
+}
+
+case "${cmd}" in
+"list") cmd_list ;;
+"tree") cmd_tree ;;
+"check") cmd_check ;;
+"setup") cmd_setup "${@}" ;;
+"delete") cmd_delete "${@}" ;;
+"import") cmd_import "${@}" ;;
+"generate")
+	"${BIN}" generate "${@}"
+	;;
+*)
+	die "unknown command ${cmd}"
+	;;
+esac

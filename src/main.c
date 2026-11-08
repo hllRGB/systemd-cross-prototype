@@ -20,6 +20,7 @@ struct opts {
         int force;
         int no_reload;
         int dry;
+        int machine;
 };
 
 static int use_color_out, use_color_err;
@@ -79,7 +80,11 @@ static void collect_strata(const struct config *cfg, strvec *out) {
                         sv_push(out, cfg->units[i].stratum);
 }
 
+static int machine_mode;
+
 static void print_diags(const struct plan *p, int errors) {
+        if (machine_mode)
+                return;
         if (errors) {
                 for (size_t i = 0; i < p->errors.n; i++)
                         errf("%s", p->errors.v[i]);
@@ -324,6 +329,148 @@ static int cmd_tree(struct opts *o) {
         world_free(&w);
         sv_free(&strata);
         plan_free(&p);
+        return r < 0 ? 1 : 0;
+}
+
+static int cmp_str(const void *a, const void *b);
+static void collect_enabled(const struct config *cfg, const char *strata_root,
+                            const char *stratum, strvec *out,
+                            strvec *skipped_targets, strvec *ignored);
+static void filter_available(const char *strata_root, const char *stratum,
+                             strvec *found, strvec *dangling);
+
+static int cmd_plan(struct opts *o) {
+        struct config cfg;
+        char *err = NULL;
+        if (config_load(&cfg, o->config, &err) < 0) {
+                printf("error\t%s\nstatus\tfail\n", err ? err : "config load failed");
+                free(err);
+                return 1;
+        }
+
+        struct world w = {0};
+        struct plan p;
+        strvec strata = {0};
+
+        machine_mode = 1;
+        int r = analyse(o, &cfg, &p, &w, &strata);
+        machine_mode = 0;
+
+        printf("local\t%s\n", cfg.init ? cfg.init : "");
+        for (size_t i = 0; i < cfg.n_units; i++)
+                printf("explicit\t%s\t%s\n", cfg.units[i].stratum, cfg.units[i].name);
+        for (size_t i = 0; i < p.n; i++) {
+                printf("unit\t%s\t%s\t%s\n", p.v[i].stratum, p.v[i].src, p.v[i].out);
+                for (size_t k = 0; k < p.v[i].edges.n; k++)
+                        printf("edge\t%s\t%s\n", p.v[i].out, p.v[i].edges.v[k]);
+                for (size_t k = 0; k < p.v[i].wants.n; k++)
+                        printf("link\t%s\t%s\twants\n", p.v[i].out, p.v[i].wants.v[k]);
+                for (size_t k = 0; k < p.v[i].requires.n; k++)
+                        printf("link\t%s\t%s\trequires\n", p.v[i].out, p.v[i].requires.v[k]);
+        }
+        for (size_t i = 0; i < p.errors.n; i++)
+                printf("error\t%s\n", p.errors.v[i]);
+        for (size_t i = 0; i < p.warns.n; i++)
+                printf("warn\t%s\n", p.warns.v[i]);
+        printf("status\t%s\n", r < 0 ? "fail" : "ok");
+
+        config_free(&cfg);
+        world_free(&w);
+        sv_free(&strata);
+        plan_free(&p);
+        return r < 0 ? 1 : 0;
+}
+
+static int cmd_import_list(struct opts *o, const char *stratum) {
+        struct config cfg;
+        char *err = NULL;
+        if (config_load(&cfg, o->config, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                free(err);
+                return 1;
+        }
+
+        strvec found = {0}, targets = {0}, dangling = {0}, ignored = {0};
+        collect_enabled(&cfg, o->strata_root, stratum, &found, &targets, &ignored);
+        filter_available(o->strata_root, stratum, &found, &dangling);
+        if (found.n > 1)
+                qsort(found.v, found.n, sizeof(char *), cmp_str);
+
+        for (size_t i = 0; i < found.n; i++)
+                printf("unit\t%s\n", found.v[i]);
+        for (size_t i = 0; i < targets.n; i++)
+                printf("target\t%s\n", targets.v[i]);
+        for (size_t i = 0; i < dangling.n; i++)
+                printf("dangling\t%s\n", dangling.v[i]);
+        for (size_t i = 0; i < ignored.n; i++)
+                printf("ignored\t%s\n", ignored.v[i]);
+
+        config_free(&cfg);
+        sv_free(&found);
+        sv_free(&targets);
+        sv_free(&dangling);
+        sv_free(&ignored);
+        return 0;
+}
+
+static int cmd_config_add(struct opts *o, const char *stratum, const char *unit) {
+        struct config cfg;
+        char *err = NULL;
+        if (config_load(&cfg, o->config, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                free(err);
+                return 1;
+        }
+        config_add(&cfg, stratum, unit);
+        int r = config_save(&cfg);
+        if (r < 0)
+                fprintf(stderr, "error: cannot save %s\n", o->config);
+        config_free(&cfg);
+        return r < 0 ? 1 : 0;
+}
+
+static int cmd_config_del(struct opts *o, const char *stratum, const char *unit) {
+        struct config cfg;
+        char *err = NULL;
+        if (config_load(&cfg, o->config, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                free(err);
+                return 1;
+        }
+        if (config_del(&cfg, stratum, unit) < 0) {
+                fprintf(stderr, "error: %s/%s is not an explicit entry\n", stratum, unit);
+                config_free(&cfg);
+                return 1;
+        }
+        int r = config_save(&cfg);
+        if (r < 0)
+                fprintf(stderr, "error: cannot save %s\n", o->config);
+        config_free(&cfg);
+        return r < 0 ? 1 : 0;
+}
+
+static int cmd_config_add_many(struct opts *o, const char *stratum) {
+        struct config cfg;
+        char *err = NULL;
+        if (config_load(&cfg, o->config, &err) < 0) {
+                fprintf(stderr, "error: %s\n", err ? err : "config load failed");
+                free(err);
+                return 1;
+        }
+
+        char *line = NULL;
+        size_t cap = 0;
+        while (getline(&line, &cap, stdin) >= 0) {
+                rstrip(line);
+                if (line[0] && line[0] != '#')
+                        config_add(&cfg, stratum, line);
+        }
+        free(line);
+
+        int r = config_save(&cfg);
+        if (r < 0)
+                fprintf(stderr, "error: cannot save %s\n", o->config);
+        config_free(&cfg);
         return r < 0 ? 1 : 0;
 }
 
@@ -648,6 +795,13 @@ int main(int argc, char **argv) {
         use_color_out = isatty(STDOUT_FILENO) && !getenv("NO_COLOR");
         use_color_err = isatty(STDERR_FILENO) && !getenv("NO_COLOR");
 
+        if (getenv("SYSTEMD_CROSS_CONFIG"))
+                o.config = getenv("SYSTEMD_CROSS_CONFIG");
+        if (getenv("SYSTEMD_CROSS_STRATA_ROOT"))
+                o.strata_root = getenv("SYSTEMD_CROSS_STRATA_ROOT");
+        if (getenv("SYSTEMD_CROSS_LOCAL"))
+                o.local = getenv("SYSTEMD_CROSS_LOCAL");
+
         char **pos = xmalloc((size_t)argc * sizeof(*pos));
         int np = 0;
 
@@ -699,6 +853,30 @@ int main(int argc, char **argv) {
                 return cmd_tree(&o);
         if (strcmp(cmd, "check") == 0)
                 return cmd_check(&o);
+        if (strcmp(cmd, "plan") == 0)
+                return cmd_plan(&o);
+        if (strcmp(cmd, "import-list") == 0) {
+                if (nargs < 1) {
+                        usage();
+                        return 2;
+                }
+                return cmd_import_list(&o, args[0]);
+        }
+        if (strcmp(cmd, "config-add") == 0 || strcmp(cmd, "config-del") == 0) {
+                if (nargs < 2) {
+                        usage();
+                        return 2;
+                }
+                return cmd[7] == 'a' ? cmd_config_add(&o, args[0], args[1])
+                                     : cmd_config_del(&o, args[0], args[1]);
+        }
+        if (strcmp(cmd, "config-add-many") == 0) {
+                if (nargs < 1) {
+                        usage();
+                        return 2;
+                }
+                return cmd_config_add_many(&o, args[0]);
+        }
         if (strcmp(cmd, "setup") == 0)
                 return cmd_setup(&o, args, nargs);
         if (strcmp(cmd, "import") == 0)

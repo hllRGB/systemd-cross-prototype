@@ -95,4 +95,12 @@ if grep -q 'units = extra.target' "$TMP/import.conf"; then
 fi
 pass "import enabled units"
 
+# ---------------------------------------------------------------- shell CLI
+SYSTEMD_CROSS_BIN="$PWD/systemd-cross" sh cli/brl-systemd \
+	--config "$TMP/test.conf" --strata-root "$FIX" list > "$TMP/cli-list" || fail "cli list"
+grep -q 'bedrock-beta-foo.service' "$TMP/cli-list" || fail "cli list output"
+SYSTEMD_CROSS_BIN="$PWD/systemd-cross" sh cli/brl-systemd \
+	--config "$TMP/test.conf" --strata-root "$FIX" check >/dev/null || fail "cli check"
+pass "shell CLI"
+
 echo "all tests passed"

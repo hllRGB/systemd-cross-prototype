@@ -84,32 +84,38 @@ implicit socket/timer pairing keeps working.
 
 ## Usage
 
-The build is statically linked by default (`LDFLAGS = -static`) so the
-binary runs under any init stratum, including musl ones.
+Two layers:
+
+- `systemd-cross` — static C backend. Machine-readable commands:
+  `plan`, `import-list <stratum>`, `config-add`, `config-del`,
+  `config-add-many` and `generate`. Output is tab separated.
+- `cli/brl-systemd` — busybox sh user interface, installed as
+  `brl systemd`. Formatting and colours come from
+  `/bedrock/share/common-code`.
+
+Backend:
 
 ```sh
 make
-./systemd-cross --config tests/test.conf --strata-root tests/fixtures/strata check
-./systemd-cross --config tests/test.conf --strata-root tests/fixtures/strata tree
-./systemd-cross --config tests/test.conf --strata-root tests/fixtures/strata generate /tmp/out
+./systemd-cross plan
+./systemd-cross import-list debian
+./systemd-cross generate /tmp/out
 ```
 
-`--strata-root` exists for offline testing; the default is
-`/bedrock/strata`. `--config` defaults to
-`/bedrock/etc/global-units.conf`.
-
-Editing the whitelist:
+CLI:
 
 ```sh
-./systemd-cross setup  debian ssh.service
-./systemd-cross delete debian ssh.service
-./systemd-cross import debian --dry-run   # expand *.wants/*.requires into entries
-./systemd-cross import debian
+SYSTEMD_CROSS_BIN=$PWD/systemd-cross sh cli/brl-systemd \
+    --config tests/test.conf --strata-root tests/fixtures/strata list
 ```
 
-`import` reads `<stratum>/etc/systemd/system/*.wants` and `*.requires` and adds
-every linked unit as an explicit entry. Target links are skipped: targets are
-never ported.
+Options (`-c/--config`, `--strata-root`, `--local`, `--force`, `--dry-run`)
+may appear before or after the command. Defaults are
+`/bedrock/etc/global-units.conf` and `/bedrock/strata`.
+
+`import` expands `<stratum>/etc/systemd/system/*.wants` and `*.requires`.
+Target links, dangling links and `[resolve] ignore` matches are skipped.
+`setup` and `import` revert on analysis failure unless `--force` is given.
 
 Generator mode: the first argument is the output directory. Under
 systemd the generator is invoked with three directories; only the first

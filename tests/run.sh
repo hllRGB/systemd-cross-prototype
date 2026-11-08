@@ -39,7 +39,7 @@ grep -q "^EnvironmentFile=.*$FIX/beta/etc/foo.conf$" "$TMP/gen/bedrock-beta-foo.
 pass "path qualification"
 
 [ -L "$TMP/gen/multi-user.target.wants/bedrock-beta-foo.service" ] || fail "wants link missing"
-[ "$(readlink "$TMP/gen/multi-user.target.wants/bedrock-beta-foo.service")" = "bedrock-beta-foo.service" ] || fail "wants link not relative"
+[ "$(readlink "$TMP/gen/multi-user.target.wants/bedrock-beta-foo.service")" = "../bedrock-beta-foo.service" ] || fail "wants link not relative"
 pass "install links"
 
 # ---------------------------------------------------------------- masked unit

@@ -74,6 +74,13 @@ static int analyse(struct opts *o, struct config *cfg, struct plan *p,
         return r;
 }
 
+static int symlink_relative(const char *unit, const char *linkpath) {
+        char *t = xasprintf("../%s", unit);
+        int r = symlink(t, linkpath);
+        free(t);
+        return r;
+}
+
 static int write_file(const char *path, const char *text) {
         int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
         if (fd < 0)
@@ -147,7 +154,7 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
                         }
                         char *lp = path_concat(d, u->out);
                         unlink(lp);
-                        if (symlink(u->out, lp) < 0) {
+                        if (symlink_relative(u->out, lp) < 0) {
                                 fprintf(stderr, "error: cannot link %s\n", lp);
                                 free(lp);
                                 free(d);
@@ -165,7 +172,7 @@ static int cmd_generate(struct opts *o, char **args, int nargs) {
                         }
                         char *lp = path_concat(d, u->out);
                         unlink(lp);
-                        if (symlink(u->out, lp) < 0) {
+                        if (symlink_relative(u->out, lp) < 0) {
                                 fprintf(stderr, "error: cannot link %s\n", lp);
                                 free(lp);
                                 free(d);

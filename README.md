@@ -116,4 +116,8 @@ qualification, install links, mask/alias/template handling, and runs
 - `WorkingDirectory=` outside shared paths only warns
 - `%n` / `%N` change meaning after renaming (not rewritten)
 - `systemctl link` units (`LINKED`) are read but not treated specially
+- mount-sandbox directives (`ProtectSystem=`, `PrivateTmp=`, ...) are passed
+  through unchanged; they apply to the host namespace, so their effect on the
+  chrooted payload is weaker than intended
+- `Type=dbus` units depend on the init stratum's system bus policy
 - no `brl` integration, no live systemd installation

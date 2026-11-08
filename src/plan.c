@@ -182,8 +182,12 @@ static int is_local_only(struct plan *p, const char *token) {
 static int dep_provider(struct plan *p, const char *consumer, const char *token, const char **prov) {
         struct uent *e;
 
-        if (is_local_only(p, token))
+        if (is_local_only(p, token)) {
+                struct stratum_idx *ls = world_get(p->w, p->local);
+                if (ls && sidx_resolve(ls, token, &e) <= 0)
+                        p_add(&p->warns, "local_only %s not found in %s", token, p->local);
                 return 0;
+        }
 
         if (strcmp(consumer, p->local) == 0)
                 return 0;
@@ -238,6 +242,63 @@ static char *qualify_path(struct stratum_idx *src, const char *path) {
                 return xstrdup(path);
         return path_concat(src->root, path + 1);
 }
+
+static int is_condition_path_key(const char *k) {
+        static const char *const keys[] = {
+                "ConditionPathExists", "ConditionPathExistsGlob",
+                "ConditionPathIsDirectory", "ConditionPathIsSymbolicLink",
+                "ConditionPathIsMountPoint", "ConditionPathIsReadWrite",
+                "ConditionDirectoryNotEmpty", "ConditionFileNotEmpty",
+                "ConditionFileIsExecutable",
+                "AssertPathExists", "AssertPathExistsGlob",
+                "AssertPathIsDirectory", "AssertPathIsSymbolicLink",
+                "AssertPathIsMountPoint", "AssertPathIsReadWrite",
+                "AssertDirectoryNotEmpty", "AssertFileNotEmpty",
+                "AssertFileIsExecutable",
+                NULL,
+        };
+        for (const char *const *s = keys; *s; s++)
+                if (strcmp(k, *s) == 0)
+                        return 1;
+        return 0;
+}
+
+/* qualify a path-ish value, preserving "!" negation and surrounding quotes */
+static char *qualify_value(struct stratum_idx *src, const char *v) {
+        if (v[0] == '"' && v[0] && v[strlen(v) - 1] == '"' && strlen(v) >= 2) {
+                size_t n = strlen(v);
+                char *inner = xmalloc(n);
+                memcpy(inner, v + 1, n - 2);
+                inner[n - 2] = 0;
+                char *q = qualify_path(src, inner);
+                free(inner);
+                char *r = xasprintf("\"%s\"", q);
+                free(q);
+                return r;
+        }
+        if (v[0] == '!')
+                return xasprintf("!%s", qualify_path(src, v + 1));
+        return qualify_path(src, v);
+}
+
+/* empty or restrictive capability sets break chroot(2); make CAP_SYS_CHROOT
+ * available and let the caller warn about it. */
+static char *fix_caps(struct plan *p, const char *name, const char *val) {
+        if (*val == 0) {
+                p_add(&p->warns, "%s: empty CapabilityBoundingSet, adding CAP_SYS_CHROOT", name);
+                return xstrdup("CAP_SYS_CHROOT");
+        }
+        if (val[0] == '~') {
+                if (strstr(val, "CAP_SYS_CHROOT"))
+                        p_add(&p->errors, "%s: CapabilityBoundingSet excludes CAP_SYS_CHROOT", name);
+                return xstrdup(val);
+        }
+        if (strstr(val, "CAP_SYS_CHROOT"))
+                return xstrdup(val);
+        p_add(&p->warns, "%s: CapabilityBoundingSet lacks CAP_SYS_CHROOT, adding it", name);
+        return xasprintf("%s CAP_SYS_CHROOT", val);
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Exec rewriting                                                      */
@@ -304,7 +365,7 @@ static char *wrap_exec(struct plan *p, struct stratum_idx *src, const char *name
 /* ------------------------------------------------------------------ */
 /* line oriented transform                                             */
 
-enum section { SEC_OTHER, SEC_UNIT, SEC_SERVICE, SEC_INSTALL };
+enum section { SEC_OTHER, SEC_UNIT, SEC_SERVICE, SEC_INSTALL, SEC_TIMER, SEC_SOCKET, SEC_PATH };
 
 static int is_closure_key(const char *k) {
         return strcmp(k, "Requires") == 0 || strcmp(k, "Wants") == 0 ||
@@ -395,6 +456,31 @@ static void rewrite_dep_list(struct plan *p, struct stratum_idx *src, const char
                 }
         }
         free(copy);
+}
+
+static char *rewrite_single_dep(struct plan *p, struct stratum_idx *src, const char *name,
+                                const char *key, const char *value, int closure,
+                                struct out_unit *ou) {
+        if (strchr(value, '%'))
+                return xstrdup(value);
+
+        const char *prov = NULL;
+        int r = dep_provider(p, src->name, value, &prov);
+        if (r < 0) {
+                p_add(&p->errors, "%s: %s=%s cannot be resolved", name, key, value);
+                p_add(&ou->edges, "%s=%s -> missing", key, value);
+                return xstrdup(value);
+        }
+        if (r == 0) {
+                p_add(&ou->edges, "%s=%s -> local", key, value);
+                return xstrdup(value);
+        }
+        p_add(&ou->edges, "%s=%s -> %s", key, value, prov);
+        if (closure) {
+                sv_push(&ou->dep_strata, prov);
+                sv_push(&ou->dep_names, value);
+        }
+        return plan_prefix_name(prov, value);
 }
 
 static void rewrite_install_list(struct plan *p, struct stratum_idx *src, const char *name,
@@ -497,6 +583,12 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                                 sec = SEC_SERVICE;
                         else if (strcmp(s, "[Install]") == 0)
                                 sec = SEC_INSTALL;
+                        else if (strcmp(s, "[Timer]") == 0)
+                                sec = SEC_TIMER;
+                        else if (strcmp(s, "[Socket]") == 0)
+                                sec = SEC_SOCKET;
+                        else if (strcmp(s, "[Path]") == 0)
+                                sec = SEC_PATH;
                         else
                                 sec = SEC_OTHER;
                         sb_add(&out, s);
@@ -529,6 +621,12 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                         } else if (is_order_key(key)) {
                                 sb_free(&newval);
                                 rewrite_dep_list(p, src, name, key, val, 0, ou, &newval);
+                        } else if (strcmp(key, "RequiresMountsFor") == 0 ||
+                                   is_condition_path_key(key)) {
+                                sb_free(&newval);
+                                char *q = qualify_value(src, val);
+                                sb_add(&newval, q);
+                                free(q);
                         }
                 } else if (sec == SEC_SERVICE) {
                         if (is_exec_key(key)) {
@@ -550,11 +648,33 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                                 if (val[0] == '/' && strcmp(val, "/") != 0 && !is_shared_path(val))
                                         p_add(&p->warns,
                                               "%s: WorkingDirectory=%s is outside shared paths", name, val);
+                        } else if (strcmp(key, "CapabilityBoundingSet") == 0) {
+                                sb_free(&newval);
+                                char *c = fix_caps(p, name, val);
+                                sb_add(&newval, c);
+                                free(c);
+                        } else if (strcmp(key, "Sockets") == 0) {
+                                sb_free(&newval);
+                                rewrite_dep_list(p, src, name, key, val, 1, ou, &newval);
                         } else if (strcmp(key, "StandardOutput") == 0 || strcmp(key, "StandardError") == 0) {
                                 if (has_prefix(val, "file:") || has_prefix(val, "append:"))
                                         p_add(&p->warns, "%s: %s=%s not rewritten", name, key, val);
                         } else if (is_fatal_key(key, val)) {
                                 p_add(&p->errors, "%s: unsupported directive %s=", name, key);
+                        }
+                } else if (sec == SEC_TIMER || sec == SEC_PATH) {
+                        if (strcmp(key, "Unit") == 0) {
+                                sb_free(&newval);
+                                char *n = rewrite_single_dep(p, src, name, key, val, 1, ou);
+                                sb_add(&newval, n);
+                                free(n);
+                        }
+                } else if (sec == SEC_SOCKET) {
+                        if (strcmp(key, "Service") == 0) {
+                                sb_free(&newval);
+                                char *n = rewrite_single_dep(p, src, name, key, val, 1, ou);
+                                sb_add(&newval, n);
+                                free(n);
                         }
                 } else if (sec == SEC_INSTALL) {
                         if (strcmp(key, "WantedBy") == 0) {
@@ -578,6 +698,33 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
         }
 
         return sb_steal(&out);
+}
+
+static char *find_setting(const char *text, const char *key) {
+        char *cur = (char *)text;
+        char *res = NULL;
+
+        for (;;) {
+                char *line = next_logical_line(&cur);
+                if (!line)
+                        break;
+                char *s = line;
+                while (*s == ' ' || *s == '\t')
+                        s++;
+                if (*s && *s != '#' && *s != ';' && *s != '[') {
+                        char *eq = strchr(s, '=');
+                        if (eq) {
+                                *eq = 0;
+                                rstrip(s);
+                                if (strcmp(s, key) == 0) {
+                                        free(res);
+                                        res = trimdup(eq + 1);
+                                }
+                        }
+                }
+                free(line);
+        }
+        return res;
 }
 
 /* ------------------------------------------------------------------ */
@@ -676,6 +823,31 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w) {
                 struct stratum_idx *ls = world_get(w, p->local);
                 if (ls && sidx_find(ls, ou->out))
                         p_add(&p->errors, "%s: generated name collides with local unit", ou->out);
+
+                /* implicit companion units: foo.timer -> foo.service, etc. */
+                if (has_suffix(uname, ".timer") || has_suffix(uname, ".path") ||
+                    has_suffix(uname, ".socket")) {
+                        const char *key = has_suffix(uname, ".socket") ? "Service" : "Unit";
+                        char *explicit_val = find_setting(ou->text, key);
+                        int explicit_key = explicit_val != NULL;
+                        free(explicit_val);
+                        if (!explicit_key) {
+                                const char *dot = strrchr(uname, '.');
+                                size_t cut = (size_t)(dot - uname);
+                                char *comp = xasprintf("%.*s.service", (int)cut, uname);
+                                struct uent *ce = NULL;
+                                if (sidx_resolve(src, comp, &ce) > 0) {
+                                        if (qn == qcap) {
+                                                qcap = qcap ? qcap * 2 : 8;
+                                                queue = xrealloc(queue, qcap * sizeof(*queue));
+                                        }
+                                        queue[qn].stratum = xstrdup(sname);
+                                        queue[qn].name = xstrdup(comp);
+                                        qn++;
+                                }
+                                free(comp);
+                        }
+                }
 
                 for (size_t i = 0; i < ou->dep_names.n; i++) {
                         const char *ds = ou->dep_strata.v[i];

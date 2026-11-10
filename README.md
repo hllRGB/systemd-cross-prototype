@@ -16,6 +16,13 @@ Early but usable prototype. The generated units are written in a form that
 `systemd-analyze verify --root=` accepts, and the dependency/closure
 resolution works against fixture strata.
 
+## What are tested
+
+- `brl-systemd setup stratum unitfile` is available,`--user` also.（export the unit for global use)
+- Generators runs well.
+- `brl-systemd delete unitfile` is avilable. (remove that from global scope)
+
+
 ## THINGS YOU MUST KNOW
 
 You need extra modifications to make it work. See `## Deployment`
@@ -215,8 +222,9 @@ bedrock.conf [env-vars]:
 manager's own environment receives `SYSTEMD_GENERATOR_PATH` before it runs its
 generators. No kernel command line changes are involved.
 
-## Known limitations (v0.1)
+## Known limitations
 
+- AI-generated though reviewed, some names  may be confusing. Feel free to ask.
 - `ExecStart=@...` (argv0 override) is not translated
 - `[Install] Alias=` / `Also=` prefix the whole value, so multi-value lists
   are only partially rewritten

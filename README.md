@@ -3,8 +3,8 @@
 Offline prototype for porting foreign stratum systemd units into the
 init-providing stratum's systemd instance, on Bedrock Linux.
 
-Though deployed for daily use on my machine, this repository is intentionally **not** wired into `brl` yet. It only
-implements the two pieces needed to develop and test the logic offline:
+Though deployed for daily use on my machine, this repository is **not** ready for everyone yet. It only
+implements the two pieces needed to develop and test the logic:
 
 - a config editor/validator (`setup`, `delete`, `list`, `tree`, `check`)
 - a unit generator (`generate <dir>`), shaped to be called as a systemd
@@ -12,10 +12,9 @@ implements the two pieces needed to develop and test the logic offline:
 
 ## Status
 
-Early prototype. The generated units are written in a form that
+Early but usable prototype. The generated units are written in a form that
 `systemd-analyze verify --root=` accepts, and the dependency/closure
-resolution works against fixture strata. Nothing is installed into a
-live systemd yet.
+resolution works against fixture strata.
 
 ## THINGS YOU MUST KNOW
 
@@ -25,7 +24,7 @@ You need extra modifications to make it work. See `## Deployment`
 - Also export the `SYSTEMD_GENERATOR_PATH`=`/bedrock/libexec/systemd-user-generators:` to the environment through `/bedrock/etc/bedrock.conf` so the systemd-user can find it too.
 - `ncstrat` ,the `strat` binary but has no capabilities is also required. Place it to `/bedrock/libexec/ncstrat`
 
-It is only tested on my machine. Think twice before using this.
+It is only tested on my machine. Think twice or make a system snapshot (if you can) before really using this.
 
 
 ## Model

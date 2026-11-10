@@ -1,3 +1,5 @@
+// vim: set sw=8 ts=8 et:
+#include "util.h"
 #define _GNU_SOURCE
 #include "plan.h"
 
@@ -11,9 +13,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void p_add(strvec *sv, const char *fmt, ...) {
+// We generate the proceeded unit files.
+
+static void p_add(strvec * sv,
+                  const char * fmt,
+                  ...) {
         va_list ap;
-        char *s = NULL;
+        char * s = NULL;
 
         va_start(ap, fmt);
         if (vasprintf(&s, fmt, ap) < 0) {
@@ -25,11 +31,12 @@ static void p_add(strvec *sv, const char *fmt, ...) {
         free(s);
 }
 
-char *plan_prefix_name(const char *stratum, const char *name) {
+char * plan_prefix_name(const char * stratum,
+                        const char * name) {
         return xasprintf("%s-%s", stratum, name);
 }
 
-void plan_free(struct plan *p) {
+void plan_free(struct plan * p) {
         for (size_t i = 0; i < p->n; i++) {
                 free(p->v[i].stratum);
                 free(p->v[i].src);
@@ -51,9 +58,10 @@ void plan_free(struct plan *p) {
 /* ------------------------------------------------------------------ */
 /* unit text assembly (main file + drop-ins)                           */
 
-static void append_file(sbuf *b, const char *path) {
+static void append_file(sbuf * b,
+                        const char * path) {
         size_t len = 0;
-        char *t = read_whole_file(path, &len);
+        char * t   = read_whole_file(path, &len);
         if (!t)
                 return;
         sb_addn(b, t, len);
@@ -62,29 +70,30 @@ static void append_file(sbuf *b, const char *path) {
         free(t);
 }
 
-static void add_variants(strvec *v, const char *name) {
+static void add_variants(strvec * v,
+                         const char * name) {
         sv_push(v, name);
 
-        const char *at = strchr(name, '@');
-        const char *dot = strrchr(name, '.');
+        const char * at  = strchr(name, '@');
+        const char * dot = strrchr(name, '.');
         if (!dot)
                 return;
 
         if (at && dot > at && at[1] != '.') {
-                char *t = xasprintf("%.*s@%s", (int)(at - name), name, dot);
+                char * t = xasprintf("%.*s@%s", (int)(at - name), name, dot);
                 sv_push(v, t);
                 free(t);
         }
 
         size_t blen = (size_t)(dot - name);
-        char *base = xmalloc(blen + 1);
+        char * base = xmalloc(blen + 1);
         memcpy(base, name, blen);
         base[blen] = 0;
 
         for (size_t i = blen; i > 0; i--) {
                 if (base[i - 1] != '-')
                         continue;
-                char *t = xasprintf("%.*s%s", (int)i, base, dot);
+                char * t = xasprintf("%.*s%s", (int)i, base, dot);
                 sv_push(v, t);
                 free(t);
         }
@@ -92,12 +101,13 @@ static void add_variants(strvec *v, const char *name) {
 }
 
 struct dfile {
-        char *bn;
+        char * bn;
         int dir;
-        char *path;
+        char * path;
 };
 
-static int cmp_dfile(const void *a, const void *b) {
+static int cmp_dfile(const void * a,
+                     const void * b) {
         const struct dfile *x = a, *y = b;
         int r = strcmp(x->bn, y->bn);
         if (r)
@@ -105,27 +115,29 @@ static int cmp_dfile(const void *a, const void *b) {
         return x->dir - y->dir;
 }
 
-static void collect_dropins(struct stratum_idx *s, const char *variant, sbuf *out) {
-        struct dfile *v = NULL;
+static void collect_dropins(struct stratum_idx * s,
+                            const char * variant,
+                            sbuf * out) {
+        struct dfile * v = NULL;
         size_t n = 0, cap = 0;
 
         for (int d = 0; d < sidx_nudir(s); d++) {
-                char *dd = xasprintf("%s/%s/%s.d", s->root, sidx_udir(s, d), variant);
-                DIR *dp = opendir(dd);
+                char * dd = xasprintf("%s/%s/%s.d", s->root, sidx_udir(s, d), variant);
+                DIR * dp  = opendir(dd);
                 if (!dp) {
                         free(dd);
                         continue;
                 }
-                struct dirent *de;
+                struct dirent * de;
                 while ((de = readdir(dp))) {
                         if (!has_suffix(de->d_name, ".conf"))
                                 continue;
                         if (n == cap) {
                                 cap = cap ? cap * 2 : 8;
-                                v = xrealloc(v, cap * sizeof(*v));
+                                v   = xrealloc(v, cap * sizeof(*v));
                         }
-                        v[n].bn = xstrdup(de->d_name);
-                        v[n].dir = d;
+                        v[n].bn   = xstrdup(de->d_name);
+                        v[n].dir  = d;
                         v[n].path = path_concat(dd, de->d_name);
                         n++;
                 }
@@ -148,10 +160,12 @@ static void collect_dropins(struct stratum_idx *s, const char *variant, sbuf *ou
         free(v);
 }
 
-static char *load_unit_text(struct stratum_idx *s, struct uent *e, const char *name) {
-        sbuf b = {0};
-        size_t len = 0;
-        char *main_text = read_whole_file(e->path, &len);
+static char * load_unit_text(struct stratum_idx * s,
+                             struct uent * e,
+                             const char * name) {
+        sbuf b           = {0};
+        size_t len       = 0;
+        char * main_text = read_whole_file(e->path, &len);
         if (!main_text)
                 return NULL;
 
@@ -172,7 +186,8 @@ static char *load_unit_text(struct stratum_idx *s, struct uent *e, const char *n
 /* ------------------------------------------------------------------ */
 /* dependency policy                                                   */
 
-static int is_local_only(struct plan *p, const char *token) {
+static int is_local_only(struct plan * p,
+                         const char * token) {
         for (size_t i = 0; i < p->cfg->local_only.n; i++)
                 if (fnmatch(p->cfg->local_only.v[i], token, 0) == 0)
                         return 1;
@@ -180,11 +195,14 @@ static int is_local_only(struct plan *p, const char *token) {
 }
 
 /* 0 = local, 1 = foreign (set *prov), -1 = missing */
-static int dep_provider(struct plan *p, const char *consumer, const char *token, const char **prov) {
-        struct uent *e;
+static int dep_provider(struct plan * p,
+                        const char * consumer,
+                        const char * token,
+                        const char ** prov) {
+        struct uent * e;
 
         if (is_local_only(p, token)) {
-                struct stratum_idx *ls = world_get(p->w, p->local);
+                struct stratum_idx * ls = world_get(p->w, p->local);
                 if (ls && sidx_resolve(ls, token, &e) <= 0)
                         p_add(&p->warns, "local_only %s not found in %s", token, p->local);
                 return 0;
@@ -193,18 +211,18 @@ static int dep_provider(struct plan *p, const char *consumer, const char *token,
         if (strcmp(consumer, p->local) == 0)
                 return 0;
 
-        struct stratum_idx *cs = world_get(p->w, consumer);
+        struct stratum_idx * cs = world_get(p->w, consumer);
         if (cs) {
                 int r = sidx_resolve(cs, token, &e);
                 if (r == 0)
-                        return -1;              /* explicitly masked */
+                        return -1; /* explicitly masked */
                 if (r > 0) {
                         *prov = consumer;
                         return 1;
                 }
         }
 
-        struct stratum_idx *ls = world_get(p->w, p->local);
+        struct stratum_idx * ls = world_get(p->w, p->local);
         if (ls) {
                 int r = sidx_resolve(ls, token, &e);
                 if (r > 0)
@@ -212,7 +230,7 @@ static int dep_provider(struct plan *p, const char *consumer, const char *token,
         }
 
         for (size_t i = 0; i < p->cfg->order.n; i++) {
-                struct stratum_idx *os = world_get(p->w, p->cfg->order.v[i]);
+                struct stratum_idx * os = world_get(p->w, p->cfg->order.v[i]);
                 if (!os)
                         continue;
                 int r = sidx_resolve(os, token, &e);
@@ -224,13 +242,12 @@ static int dep_provider(struct plan *p, const char *consumer, const char *token,
         return -1;
 }
 
-static int is_shared_path(const char *path) {
-        static const char *const list[] = {
-                "/run", "/tmp", "/var/tmp", "/dev", "/proc", "/sys",
-                "/home", "/bedrock", "/shared", "/nix", "/boot", "/efi",
-                "/mnt", "/media", NULL,
+static int is_shared_path(const char * path) {
+        static const char * const list[] = {
+            "/run",    "/tmp", "/var/tmp", "/dev", "/proc", "/sys",   "/home", "/bedrock",
+            "/shared", "/nix", "/boot",    "/efi", "/mnt",  "/media", NULL,
         };
-        for (const char *const *s = list; *s; s++) {
+        for (const char * const * s = list; *s; s++) {
                 size_t n = strlen(*s);
                 if (strncmp(path, *s, n) == 0 && (path[n] == '/' || path[n] == 0))
                         return 1;
@@ -238,42 +255,52 @@ static int is_shared_path(const char *path) {
         return 0;
 }
 
-static char *qualify_path(struct stratum_idx *src, const char *path) {
+static char * qualify_path(struct stratum_idx * src,
+                           const char * path) {
         if (path[0] != '/' || is_shared_path(path))
                 return xstrdup(path);
         return path_concat(src->root, path + 1);
 }
 
-static int is_condition_path_key(const char *k) {
-        static const char *const keys[] = {
-                "ConditionPathExists", "ConditionPathExistsGlob",
-                "ConditionPathIsDirectory", "ConditionPathIsSymbolicLink",
-                "ConditionPathIsMountPoint", "ConditionPathIsReadWrite",
-                "ConditionDirectoryNotEmpty", "ConditionFileNotEmpty",
-                "ConditionFileIsExecutable",
-                "AssertPathExists", "AssertPathExistsGlob",
-                "AssertPathIsDirectory", "AssertPathIsSymbolicLink",
-                "AssertPathIsMountPoint", "AssertPathIsReadWrite",
-                "AssertDirectoryNotEmpty", "AssertFileNotEmpty",
-                "AssertFileIsExecutable",
-                NULL,
+static int is_condition_path_key(const char * k) {
+        static const char * const keys[] = {
+            "ConditionPathExists",
+            "ConditionPathExistsGlob",
+            "ConditionPathIsDirectory",
+            "ConditionPathIsSymbolicLink",
+            "ConditionPathIsMountPoint",
+            "ConditionPathIsReadWrite",
+            "ConditionDirectoryNotEmpty",
+            "ConditionFileNotEmpty",
+            "ConditionFileIsExecutable",
+            "AssertPathExists",
+            "AssertPathExistsGlob",
+            "AssertPathIsDirectory",
+            "AssertPathIsSymbolicLink",
+            "AssertPathIsMountPoint",
+            "AssertPathIsReadWrite",
+            "AssertDirectoryNotEmpty",
+            "AssertFileNotEmpty",
+            "AssertFileIsExecutable",
+            NULL,
         };
-        for (const char *const *s = keys; *s; s++)
+        for (const char * const * s = keys; *s; s++)
                 if (strcmp(k, *s) == 0)
                         return 1;
         return 0;
 }
 
 /* qualify a path-ish value, preserving "!" negation and surrounding quotes */
-static char *qualify_value(struct stratum_idx *src, const char *v) {
+static char * qualify_value(struct stratum_idx * src,
+                            const char * v) {
         if (v[0] == '"' && v[0] && v[strlen(v) - 1] == '"' && strlen(v) >= 2) {
-                size_t n = strlen(v);
-                char *inner = xmalloc(n);
+                size_t n     = strlen(v);
+                char * inner = xmalloc(n);
                 memcpy(inner, v + 1, n - 2);
                 inner[n - 2] = 0;
-                char *q = qualify_path(src, inner);
+                char * q     = qualify_path(src, inner);
                 free(inner);
-                char *r = xasprintf("\"%s\"", q);
+                char * r = xasprintf("\"%s\"", q);
                 free(q);
                 return r;
         }
@@ -284,7 +311,9 @@ static char *qualify_value(struct stratum_idx *src, const char *v) {
 
 /* empty or restrictive capability sets break chroot(2); make CAP_SYS_CHROOT
  * available and let the caller warn about it. */
-static char *fix_caps(struct plan *p, const char *name, const char *val) {
+static char * fix_caps(struct plan * p,
+                       const char * name,
+                       const char * val) {
         if (*val == 0) {
                 p_add(&p->warns, "%s: empty CapabilityBoundingSet, adding CAP_SYS_CHROOT", name);
                 return xstrdup("CAP_SYS_CHROOT");
@@ -300,19 +329,40 @@ static char *fix_caps(struct plan *p, const char *name, const char *val) {
         return xasprintf("%s CAP_SYS_CHROOT", val);
 }
 
+static char * fix_caps2(struct plan * p,
+                        const char * name,
+                        const char * val) {
+        if (*val == 0) {
+                p_add(&p->warns, "%s: empty AmbientCapabilities, adding CAP_SYS_CHROOT", name);
+                return xstrdup("CAP_SYS_CHROOT");
+        }
+        if (val[0] == '~') {
+                if (strstr(val, "CAP_SYS_CHROOT"))
+                        p_add(&p->errors, "%s: AmbientCapabilities excludes CAP_SYS_CHROOT", name);
+                return xstrdup(val);
+        }
+        if (strstr(val, "CAP_SYS_CHROOT"))
+                return xstrdup(val);
+        p_add(&p->warns, "%s: AmbientCapabilities lacks CAP_SYS_CHROOT, adding it", name);
+        return xasprintf("%s CAP_SYS_CHROOT", val);
+}
 
 /* ------------------------------------------------------------------ */
 /* Exec rewriting                                                      */
 
-static int binary_exists(struct stratum_idx *src, const char *path) {
-        char *p = path_concat(src->root, path + 1);
-        int r = access(p, X_OK) == 0;
+static int binary_exists(struct stratum_idx * src,
+                         const char * path) {
+        char * p = path_concat(src->root, path + 1);
+        int r    = access(p, X_OK) == 0;
         free(p);
         return r;
 }
 
-static char *wrap_exec(struct plan *p, struct stratum_idx *src, const char *name,
-                       const char *key, const char *value) {
+static char * wrap_exec(struct plan * p,
+                        struct stratum_idx * src,
+                        const char * name,
+                        const char * key,
+                        const char * value) {
         char prefixes[8];
         size_t np = 0, i = 0;
 
@@ -334,7 +384,7 @@ static char *wrap_exec(struct plan *p, struct stratum_idx *src, const char *name
         }
         prefixes[np] = 0;
 
-        const char *rest = value + i;
+        const char * rest = value + i;
         if (*rest == 0)
                 return xstrdup(value);
 
@@ -348,18 +398,19 @@ static char *wrap_exec(struct plan *p, struct stratum_idx *src, const char *name
                 return xstrdup(value);
         }
 
-        char *first = xstrdup(rest);
-        char *sp = strpbrk(first, " \t");
+        char * first = xstrdup(rest);
+        char * sp    = strpbrk(first, " \t");
         if (sp)
                 *sp = 0;
         if (!binary_exists(src, first))
-                p_add(&p->warns, "%s %s: %s not executable in stratum, still wrapping",
-                      name, key, first);
+                p_add(&p->warns, "%s %s: %s not executable in stratum, still wrapping", name, key, first);
         free(first);
 
         sbuf b = {0};
         sb_add(&b, prefixes);
-        sb_addf(&b, "/bedrock/bin/strat %s %s", src->name, rest);
+        // PROBLEMS: There's certain units that sets AmbientCapabilities ,but strat's CAP_SYS_CHROOT will clear the
+        // AmbientCapabilities after exec. So we have to use another strat without CAP_SYS_CHROOT.
+        sb_addf(&b, "/bedrock/bin/ncstrat %s %s", src->name, rest);
         return sb_steal(&b);
 }
 
@@ -368,39 +419,35 @@ static char *wrap_exec(struct plan *p, struct stratum_idx *src, const char *name
 
 enum section { SEC_OTHER, SEC_UNIT, SEC_SERVICE, SEC_INSTALL, SEC_TIMER, SEC_SOCKET, SEC_PATH };
 
-static int is_closure_key(const char *k) {
-        return strcmp(k, "Requires") == 0 || strcmp(k, "Wants") == 0 ||
-               strcmp(k, "Requisite") == 0 || strcmp(k, "BindsTo") == 0 ||
-               strcmp(k, "Upholds") == 0;
+static int is_closure_key(const char * k) {
+        return strcmp(k, "Requires") == 0 || strcmp(k, "Wants") == 0 || strcmp(k, "Requisite") == 0 || strcmp(k, "BindsTo") == 0
+               || strcmp(k, "Upholds") == 0;
 }
 
-static int is_order_key(const char *k) {
-        static const char *const keys[] = {
-                "After", "Before", "Conflicts", "PartOf",
-                "PropagatesReloadTo", "ReloadPropagatedFrom", "JoinsNamespaceOf",
-                "OnFailure", "OnSuccess", NULL,
+static int is_order_key(const char * k) {
+        static const char * const keys[] = {
+            "After",     "Before",    "Conflicts", "PartOf", "PropagatesReloadTo", "ReloadPropagatedFrom", "JoinsNamespaceOf",
+            "OnFailure", "OnSuccess", NULL,
         };
-        for (const char *const *s = keys; *s; s++)
+        for (const char * const * s = keys; *s; s++)
                 if (strcmp(k, *s) == 0)
                         return 1;
         return 0;
 }
 
-static int is_exec_key(const char *k) {
-        static const char *const keys[] = {
-                "ExecStart", "ExecStartPre", "ExecStartPost",
-                "ExecStop", "ExecStopPost", "ExecReload",
-                "ExecCondition", NULL,
+static int is_exec_key(const char * k) {
+        static const char * const keys[] = {
+            "ExecStart", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload", "ExecCondition", NULL,
         };
-        for (const char *const *s = keys; *s; s++)
+        for (const char * const * s = keys; *s; s++)
                 if (strcmp(k, *s) == 0)
                         return 1;
         return 0;
 }
 
-static int is_fatal_key(const char *k, const char *v) {
-        if (strcmp(k, "RootDirectory") == 0 || strcmp(k, "RootImage") == 0 ||
-            strcmp(k, "RootImageOptions") == 0)
+static int is_fatal_key(const char * k,
+                        const char * v) {
+        if (strcmp(k, "RootDirectory") == 0 || strcmp(k, "RootImage") == 0 || strcmp(k, "RootImageOptions") == 0)
                 return 1;
         if (strcmp(k, "DynamicUser") == 0 && (strcmp(v, "yes") == 0 || strcmp(v, "true") == 0))
                 return 1;
@@ -409,14 +456,19 @@ static int is_fatal_key(const char *k, const char *v) {
         return 0;
 }
 
-static void rewrite_dep_list(struct plan *p, struct stratum_idx *src, const char *name,
-                             const char *key, const char *value, int closure,
-                             struct out_unit *ou, sbuf *out) {
-        char *copy = xstrdup(value);
-        char *save = NULL;
-        int first = 1;
+static void rewrite_dep_list(struct plan * p,
+                             struct stratum_idx * src,
+                             const char * name,
+                             const char * key,
+                             const char * value,
+                             int closure,
+                             struct out_unit * ou,
+                             sbuf * out) {
+        char * copy = xstrdup(value);
+        char * save = NULL;
+        int first   = 1;
 
-        for (char *tok = strtok_r(copy, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
+        for (char * tok = strtok_r(copy, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
                 if (!first)
                         sb_add(out, " ");
                 first = 0;
@@ -427,8 +479,8 @@ static void rewrite_dep_list(struct plan *p, struct stratum_idx *src, const char
                         continue;
                 }
 
-                const char *prov = NULL;
-                int r = dep_provider(p, src->name, tok, &prov);
+                const char * prov = NULL;
+                int r             = dep_provider(p, src->name, tok, &prov);
 
                 if (r < 0) {
                         if (closure)
@@ -446,7 +498,7 @@ static void rewrite_dep_list(struct plan *p, struct stratum_idx *src, const char
                         continue;
                 }
 
-                char *pref = plan_prefix_name(prov, tok);
+                char * pref = plan_prefix_name(prov, tok);
                 sb_add(out, pref);
                 p_add(&ou->edges, "%s=%s -> %s", key, tok, prov);
                 free(pref);
@@ -459,14 +511,18 @@ static void rewrite_dep_list(struct plan *p, struct stratum_idx *src, const char
         free(copy);
 }
 
-static char *rewrite_single_dep(struct plan *p, struct stratum_idx *src, const char *name,
-                                const char *key, const char *value, int closure,
-                                struct out_unit *ou) {
+static char * rewrite_single_dep(struct plan * p,
+                                 struct stratum_idx * src,
+                                 const char * name,
+                                 const char * key,
+                                 const char * value,
+                                 int closure,
+                                 struct out_unit * ou) {
         if (strchr(value, '%'))
                 return xstrdup(value);
 
-        const char *prov = NULL;
-        int r = dep_provider(p, src->name, value, &prov);
+        const char * prov = NULL;
+        int r             = dep_provider(p, src->name, value, &prov);
         if (r < 0) {
                 p_add(&p->errors, "%s: %s=%s cannot be resolved", name, key, value);
                 p_add(&ou->edges, "%s=%s -> missing", key, value);
@@ -484,9 +540,14 @@ static char *rewrite_single_dep(struct plan *p, struct stratum_idx *src, const c
         return plan_prefix_name(prov, value);
 }
 
-static void rewrite_install_list(struct plan *p, struct stratum_idx *src, const char *name,
-                                 const char *key, const char *value, struct out_unit *ou,
-                                 sbuf *out, int require) {
+static void rewrite_install_list(struct plan * p,
+                                 struct stratum_idx * src,
+                                 const char * name,
+                                 const char * key,
+                                 const char * value,
+                                 struct out_unit * ou,
+                                 sbuf * out,
+                                 int require) {
         /* Units of the local stratum already exist natively.  Never wire their
          * copies into the boot transaction, or every local service would run
          * twice.  The [Install] stanza is kept verbatim for manual enabling. */
@@ -495,17 +556,16 @@ static void rewrite_install_list(struct plan *p, struct stratum_idx *src, const 
                 return;
         }
 
-        char *copy = xstrdup(value);
-        char *save = NULL;
-        int first = 1;
+        char * copy = xstrdup(value);
+        char * save = NULL;
+        int first   = 1;
 
-        for (char *tok = strtok_r(copy, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
-                const char *prov = NULL;
-                int r = dep_provider(p, src->name, tok, &prov);
+        for (char * tok = strtok_r(copy, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
+                const char * prov = NULL;
+                int r             = dep_provider(p, src->name, tok, &prov);
 
                 if (r != 0) {
-                        p_add(&p->warns, "%s: [Install] %s=%s is not a local target, link skipped",
-                              name, key, tok);
+                        p_add(&p->warns, "%s: [Install] %s=%s is not a local target, link skipped", name, key, tok);
                         continue;
                 }
                 if (!first)
@@ -517,20 +577,37 @@ static void rewrite_install_list(struct plan *p, struct stratum_idx *src, const 
         free(copy);
 }
 
-static char *next_logical_line(char **cur) {
+/* A positive SystemCallFilter= turns the unit into an allow-list; the wrapper
+ * itself needs chroot(2) before it can exec the real payload. */
+static int scf_has_allowlist(const char * val) {
+        char * copy = xstrdup(val);
+        char * save = NULL;
+        int allow   = 0;
+
+        for (char * tok = strtok_r(copy, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
+                if (*tok != '~') {
+                        allow = 1;
+                        break;
+                }
+        }
+        free(copy);
+        return allow;
+}
+
+static char * next_logical_line(char ** cur) {
         if (!*cur || !**cur)
                 return NULL;
 
-        sbuf b = {0};
-        char *p = *cur;
+        sbuf b   = {0};
+        char * p = *cur;
 
         for (;;) {
-                char *nl = strchr(p, '\n');
+                char * nl  = strchr(p, '\n');
                 size_t len = nl ? (size_t)(nl - p) : strlen(p);
-                char *seg = xmalloc(len + 1);
+                char * seg = xmalloc(len + 1);
                 memcpy(seg, p, len);
                 seg[len] = 0;
-                p = nl ? nl + 1 : NULL;
+                p        = nl ? nl + 1 : NULL;
 
                 int cont = 0;
                 size_t l = strlen(seg);
@@ -540,7 +617,7 @@ static char *next_logical_line(char **cur) {
                                 bs++;
                         if (bs % 2 == 1) {
                                 seg[l - 1] = 0;
-                                cont = 1;
+                                cont       = 1;
                         }
                 }
 
@@ -558,19 +635,23 @@ static char *next_logical_line(char **cur) {
         return sb_steal(&b);
 }
 
-static char *transform_text(struct plan *p, struct stratum_idx *src, const char *name,
-                            const char *text, struct out_unit *ou) {
-        sbuf out = {0};
-        char *cur = (char *)text;
+static char * transform_text(struct plan * p,
+                             struct stratum_idx * src,
+                             const char * name,
+                             const char * text,
+                             struct out_unit * ou) {
+        sbuf out         = {0};
+        char * cur       = (char *)text;
         enum section sec = SEC_OTHER;
+        int unit_seen    = 0;
 
         for (;;) {
-                char *raw = next_logical_line(&cur);
+                char * raw = next_logical_line(&cur);
                 if (!raw)
                         break;
 
                 rstrip(raw);
-                char *s = raw;
+                char * s = raw;
                 while (*s == ' ' || *s == '\t')
                         s++;
 
@@ -602,20 +683,27 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                                 sec = SEC_OTHER;
                         sb_add(&out, s);
                         sb_add(&out, "\n");
+                        /* Keep the ported copy and the native unit from running at
+                         * the same time: both would claim the same D-Bus name,
+                         * sockets and ports. */
+                        if (sec == SEC_UNIT) {
+                                sb_addf(&out, "Conflicts=%s\n", name);
+                                unit_seen = 1;
+                        }
                         free(raw);
                         continue;
                 }
 
-                char *eq = strchr(s, '=');
+                char * eq = strchr(s, '=');
                 if (!eq) {
                         sb_add(&out, s);
                         sb_add(&out, "\n");
                         free(raw);
                         continue;
                 }
-                *eq = 0;
-                char *key = trimdup(s);
-                char *val = trimdup(eq + 1);
+                *eq        = 0;
+                char * key = trimdup(s);
+                char * val = trimdup(eq + 1);
 
                 sbuf newval = {0};
                 sb_add(&newval, val);
@@ -630,38 +718,45 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                         } else if (is_order_key(key)) {
                                 sb_free(&newval);
                                 rewrite_dep_list(p, src, name, key, val, 0, ou, &newval);
-                        } else if (strcmp(key, "RequiresMountsFor") == 0 ||
-                                   is_condition_path_key(key)) {
+                        } else if (strcmp(key, "RequiresMountsFor") == 0 || is_condition_path_key(key)) {
                                 sb_free(&newval);
-                                char *q = qualify_value(src, val);
+                                char * q = qualify_value(src, val);
                                 sb_add(&newval, q);
                                 free(q);
                         }
                 } else if (sec == SEC_SERVICE) {
                         if (is_exec_key(key)) {
                                 sb_free(&newval);
-                                char *w = wrap_exec(p, src, name, key, val);
+                                char * w = wrap_exec(p, src, name, key, val);
                                 sb_add(&newval, w);
                                 free(w);
                         } else if (strcmp(key, "EnvironmentFile") == 0) {
-                                const char *v = val;
+                                const char * v = val;
                                 sb_free(&newval);
                                 if (*v == '-') {
                                         sb_add(&newval, "-");
                                         v++;
                                 }
-                                char *q = qualify_path(src, v);
+                                char * q = qualify_path(src, v);
                                 sb_add(&newval, q);
                                 free(q);
                         } else if (strcmp(key, "WorkingDirectory") == 0) {
                                 if (val[0] == '/' && strcmp(val, "/") != 0 && !is_shared_path(val))
-                                        p_add(&p->warns,
-                                              "%s: WorkingDirectory=%s is outside shared paths", name, val);
+                                        p_add(&p->warns, "%s: WorkingDirectory=%s is outside shared paths", name, val);
                         } else if (strcmp(key, "CapabilityBoundingSet") == 0 && !p->user) {
+                                // If it needs to be run as a unprivilaged user,we give it the CAP_SYS_CHROOT capability.
                                 sb_free(&newval);
-                                char *c = fix_caps(p, name, val);
+                                char * c = fix_caps(p, name, val);
                                 sb_add(&newval, c);
                                 free(c);
+                        } else if (strcmp(key, "AmbientCapabilities") == 0 && !p->user) {
+                                // here also.
+                                sb_free(&newval);
+                                char * c = fix_caps2(p, name, val);
+                                sb_add(&newval, c);
+                                free(c);
+                        } else if (strcmp(key, "SystemCallFilter") == 0 && scf_has_allowlist(val)) {
+                                sb_add(&newval, " chroot");
                         } else if (strcmp(key, "Sockets") == 0) {
                                 sb_free(&newval);
                                 rewrite_dep_list(p, src, name, key, val, 1, ou, &newval);
@@ -674,14 +769,14 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                 } else if (sec == SEC_TIMER || sec == SEC_PATH) {
                         if (strcmp(key, "Unit") == 0) {
                                 sb_free(&newval);
-                                char *n = rewrite_single_dep(p, src, name, key, val, 1, ou);
+                                char * n = rewrite_single_dep(p, src, name, key, val, 1, ou);
                                 sb_add(&newval, n);
                                 free(n);
                         }
                 } else if (sec == SEC_SOCKET) {
                         if (strcmp(key, "Service") == 0) {
                                 sb_free(&newval);
-                                char *n = rewrite_single_dep(p, src, name, key, val, 1, ou);
+                                char * n = rewrite_single_dep(p, src, name, key, val, 1, ou);
                                 sb_add(&newval, n);
                                 free(n);
                         }
@@ -693,9 +788,11 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                                 sb_free(&newval);
                                 rewrite_install_list(p, src, name, key, val, ou, &newval, 1);
                         } else if (strcmp(key, "Alias") == 0 || strcmp(key, "Also") == 0) {
-                                p_add(&p->warns, "%s: [Install] %s not ported", name, key);
+                                p_add(&p->warns, "%s: [Install] %s is ported (%s)", name, key, src->name);
                                 sb_free(&newval);
-                                sb_add(&newval, val);
+                                char * c = xasprintf("%s-%s", src->name, val);
+                                sb_add(&newval, c);
+                                free(c);
                         }
                 }
 
@@ -706,22 +803,29 @@ static char *transform_text(struct plan *p, struct stratum_idx *src, const char 
                 free(raw);
         }
 
-        return sb_steal(&out);
+        char * res = sb_steal(&out);
+        if (!unit_seen) {
+                char * wrapped = xasprintf("[Unit]\nConflicts=%s\n\n%s", name, res);
+                free(res);
+                res = wrapped;
+        }
+        return res;
 }
 
-static char *find_setting(const char *text, const char *key) {
-        char *cur = (char *)text;
-        char *res = NULL;
+static char * find_setting(const char * text,
+                           const char * key) {
+        char * cur = (char *)text;
+        char * res = NULL;
 
         for (;;) {
-                char *line = next_logical_line(&cur);
+                char * line = next_logical_line(&cur);
                 if (!line)
                         break;
-                char *s = line;
+                char * s = line;
                 while (*s == ' ' || *s == '\t')
                         s++;
                 if (*s && *s != '#' && *s != ';' && *s != '[') {
-                        char *eq = strchr(s, '=');
+                        char * eq = strchr(s, '=');
                         if (eq) {
                                 *eq = 0;
                                 rstrip(s);
@@ -739,14 +843,18 @@ static char *find_setting(const char *text, const char *key) {
 /* ------------------------------------------------------------------ */
 /* plan construction                                                   */
 
-static char *visit_key(const char *stratum, const char *name) {
+static char * visit_key(const char * stratum,
+                        const char * name) {
         return xasprintf("%s\x1f%s", stratum, name);
 }
 
-int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
+int plan_build(struct plan * p,
+               struct config * cfg,
+               struct world * w,
+               int user) {
         memset(p, 0, sizeof *p);
-        p->cfg = cfg;
-        p->w = w;
+        p->cfg  = cfg;
+        p->w    = w;
         p->user = user;
 
         if (!cfg->init || !*cfg->init) {
@@ -760,25 +868,25 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
                 return -1;
         }
 
-        struct unit_ref *queue = NULL;
+        struct unit_ref * queue = NULL;
         size_t qn = 0, qcap = 0;
         strvec visited = {0};
 
         for (size_t i = 0; i < cfg->n_units; i++) {
                 if (qn == qcap) {
-                        qcap = qcap ? qcap * 2 : 8;
+                        qcap  = qcap ? qcap * 2 : 8;
                         queue = xrealloc(queue, qcap * sizeof(*queue));
                 }
                 queue[qn].stratum = xstrdup(cfg->units[i].stratum);
-                queue[qn].name = xstrdup(cfg->units[i].name);
+                queue[qn].name    = xstrdup(cfg->units[i].name);
                 qn++;
         }
 
         for (size_t head = 0; head < qn; head++) {
-                const char *sname = queue[head].stratum;
-                const char *uname = queue[head].name;
+                const char * sname = queue[head].stratum;
+                const char * uname = queue[head].name;
 
-                char *key = visit_key(sname, uname);
+                char * key = visit_key(sname, uname);
                 if (sv_contains(&visited, key)) {
                         free(key);
                         continue;
@@ -786,14 +894,14 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
                 sv_push(&visited, key);
                 free(key);
 
-                struct stratum_idx *src = world_get(w, sname);
+                struct stratum_idx * src = world_get(w, sname);
                 if (!src) {
                         p_add(&p->errors, "%s/%s: unknown stratum", sname, uname);
                         continue;
                 }
 
-                struct uent *e = NULL;
-                int r = sidx_resolve(src, uname, &e);
+                struct uent * e = NULL;
+                int r           = sidx_resolve(src, uname, &e);
                 if (r < 0) {
                         p_add(&p->errors, "%s/%s: unit not found", sname, uname);
                         continue;
@@ -803,7 +911,7 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
                         continue;
                 }
 
-                char *text = load_unit_text(src, e, uname);
+                char * text = load_unit_text(src, e, uname);
                 if (!text) {
                         p_add(&p->errors, "%s/%s: cannot read %s", sname, uname, e->path);
                         continue;
@@ -811,43 +919,42 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
 
                 if (p->n == p->cap) {
                         p->cap = p->cap ? p->cap * 2 : 8;
-                        p->v = xrealloc(p->v, p->cap * sizeof(*p->v));
+                        p->v   = xrealloc(p->v, p->cap * sizeof(*p->v));
                 }
-                struct out_unit *ou = &p->v[p->n];
+                struct out_unit * ou = &p->v[p->n];
                 memset(ou, 0, sizeof *ou);
                 ou->stratum = xstrdup(sname);
-                ou->src = xstrdup(uname);
-                ou->out = plan_prefix_name(sname, uname);
-                ou->text = transform_text(p, src, uname, text, ou);
+                ou->src     = xstrdup(uname);
+                ou->out     = plan_prefix_name(sname, uname);
+                ou->text    = transform_text(p, src, uname, text, ou);
                 free(text);
                 p->n++;
 
                 if (strlen(ou->out) > 255)
                         p_add(&p->errors, "%s/%s: generated name too long", sname, uname);
 
-                struct stratum_idx *ls = world_get(w, p->local);
+                struct stratum_idx * ls = world_get(w, p->local);
                 if (ls && sidx_find(ls, ou->out))
                         p_add(&p->errors, "%s: generated name collides with local unit", ou->out);
 
                 /* implicit companion units: foo.timer -> foo.service, etc. */
-                if (has_suffix(uname, ".timer") || has_suffix(uname, ".path") ||
-                    has_suffix(uname, ".socket")) {
-                        const char *key = has_suffix(uname, ".socket") ? "Service" : "Unit";
-                        char *explicit_val = find_setting(ou->text, key);
-                        int explicit_key = explicit_val != NULL;
+                if (has_suffix(uname, ".timer") || has_suffix(uname, ".path") || has_suffix(uname, ".socket")) {
+                        const char * key    = has_suffix(uname, ".socket") ? "Service" : "Unit";
+                        char * explicit_val = find_setting(ou->text, key);
+                        int explicit_key    = explicit_val != NULL;
                         free(explicit_val);
                         if (!explicit_key) {
-                                const char *dot = strrchr(uname, '.');
-                                size_t cut = (size_t)(dot - uname);
-                                char *comp = xasprintf("%.*s.service", (int)cut, uname);
-                                struct uent *ce = NULL;
+                                const char * dot = strrchr(uname, '.');
+                                size_t cut       = (size_t)(dot - uname);
+                                char * comp      = xasprintf("%.*s.service", (int)cut, uname);
+                                struct uent * ce = NULL;
                                 if (sidx_resolve(src, comp, &ce) > 0) {
                                         if (qn == qcap) {
-                                                qcap = qcap ? qcap * 2 : 8;
+                                                qcap  = qcap ? qcap * 2 : 8;
                                                 queue = xrealloc(queue, qcap * sizeof(*queue));
                                         }
                                         queue[qn].stratum = xstrdup(sname);
-                                        queue[qn].name = xstrdup(comp);
+                                        queue[qn].name    = xstrdup(comp);
                                         qn++;
                                 }
                                 free(comp);
@@ -855,16 +962,16 @@ int plan_build(struct plan *p, struct config *cfg, struct world *w, int user) {
                 }
 
                 for (size_t i = 0; i < ou->dep_names.n; i++) {
-                        const char *ds = ou->dep_strata.v[i];
-                        const char *dn = ou->dep_names.v[i];
+                        const char * ds = ou->dep_strata.v[i];
+                        const char * dn = ou->dep_names.v[i];
                         if (strcmp(ds, p->local) == 0)
                                 continue;
                         if (qn == qcap) {
-                                qcap = qcap ? qcap * 2 : 8;
+                                qcap  = qcap ? qcap * 2 : 8;
                                 queue = xrealloc(queue, qcap * sizeof(*queue));
                         }
                         queue[qn].stratum = xstrdup(ds);
-                        queue[qn].name = xstrdup(dn);
+                        queue[qn].name    = xstrdup(dn);
                         qn++;
                 }
         }

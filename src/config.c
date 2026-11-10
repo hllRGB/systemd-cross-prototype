@@ -1,3 +1,4 @@
+// vim: set sw=8 ts=8 et:
 #define _GNU_SOURCE
 #include "config.h"
 
@@ -9,7 +10,11 @@
 #include <string.h>
 #include <unistd.h>
 
-static void set_err(char **err, const char *fmt, ...) {
+// We parse the config file.
+
+static void set_err(char ** err,
+                    const char * fmt,
+                    ...) {
         if (!err)
                 return;
         va_list ap;
@@ -19,7 +24,7 @@ static void set_err(char **err, const char *fmt, ...) {
         va_end(ap);
 }
 
-void config_free(struct config *c) {
+void config_free(struct config * c) {
         if (!c)
                 return;
         free(c->path);
@@ -35,43 +40,45 @@ void config_free(struct config *c) {
         memset(c, 0, sizeof *c);
 }
 
-int config_add(struct config *c, const char *stratum, const char *name) {
+int config_add(struct config * c,
+               const char * stratum,
+               const char * name) {
         for (size_t i = 0; i < c->n_units; i++)
-                if (strcmp(c->units[i].stratum, stratum) == 0 &&
-                    strcmp(c->units[i].name, name) == 0)
+                if (strcmp(c->units[i].stratum, stratum) == 0 && strcmp(c->units[i].name, name) == 0)
                         return 0;
 
         if (c->n_units == c->cap_units) {
                 c->cap_units = c->cap_units ? c->cap_units * 2 : 8;
-                c->units = xrealloc(c->units, c->cap_units * sizeof(*c->units));
+                c->units     = xrealloc(c->units, c->cap_units * sizeof(*c->units));
         }
         c->units[c->n_units].stratum = xstrdup(stratum);
-        c->units[c->n_units].name = xstrdup(name);
+        c->units[c->n_units].name    = xstrdup(name);
         c->n_units++;
         return 0;
 }
 
-int config_del(struct config *c, const char *stratum, const char *name) {
+int config_del(struct config * c,
+               const char * stratum,
+               const char * name) {
         for (size_t i = 0; i < c->n_units; i++) {
-                if (strcmp(c->units[i].stratum, stratum) != 0 ||
-                    strcmp(c->units[i].name, name) != 0)
+                if (strcmp(c->units[i].stratum, stratum) != 0 || strcmp(c->units[i].name, name) != 0)
                         continue;
                 free(c->units[i].stratum);
                 free(c->units[i].name);
-                memmove(c->units + i, c->units + i + 1,
-                        (c->n_units - i - 1) * sizeof(*c->units));
+                memmove(c->units + i, c->units + i + 1, (c->n_units - i - 1) * sizeof(*c->units));
                 c->n_units--;
                 return 0;
         }
         return -1;
 }
 
-static void split_list(const char *value, strvec *out) {
-        char *copy = xstrdup(value);
-        char *save = NULL;
+static void split_list(const char * value,
+                       strvec * out) {
+        char * copy = xstrdup(value);
+        char * save = NULL;
 
-        for (char *tok = strtok_r(copy, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
-                char *t = trimdup(tok);
+        for (char * tok = strtok_r(copy, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+                char * t = trimdup(tok);
                 if (*t)
                         sv_push(out, t);
                 free(t);
@@ -79,7 +86,9 @@ static void split_list(const char *value, strvec *out) {
         free(copy);
 }
 
-static int is_template_sec(const char *line, const char *name, const char **arg) {
+static int is_template_sec(const char * line,
+                           const char * name,
+                           const char ** arg) {
         size_t n = strlen(name);
         if (strncmp(line, name, n) != 0)
                 return 0;
@@ -91,43 +100,45 @@ static int is_template_sec(const char *line, const char *name, const char **arg)
         return 1;
 }
 
-int config_load(struct config *c, const char *path, char **err) {
+int config_load(struct config * c,
+                const char * path,
+                char ** err) {
         memset(c, 0, sizeof *c);
-        c->path = xstrdup(path);
+        c->path    = xstrdup(path);
         c->version = 1;
 
-        FILE *f = fopen(path, "re");
+        FILE * f = fopen(path, "re");
         if (!f) {
                 if (errno == ENOENT)
-                        return 0;               /* empty config is valid */
+                        return 0; /* empty config is valid */
                 set_err(err, "%s: %s", path, strerror(errno));
                 return -1;
         }
 
         enum { SEC_NONE, SEC_GLOBAL, SEC_STRATUM, SEC_RESOLVE } sec = SEC_GLOBAL;
-        char *stratum = NULL;
-        char *line = NULL;
+        char * stratum                                              = NULL;
+        char * line                                                 = NULL;
         size_t cap = 0, lineno = 0;
 
         while (getline(&line, &cap, f) >= 0) {
                 lineno++;
                 rstrip(line);
 
-                char *s = line;
+                char * s = line;
                 while (*s == ' ' || *s == '\t')
                         s++;
                 if (*s == 0 || *s == '#' || *s == ';')
                         continue;
 
                 if (*s == '[') {
-                        char *end = strchr(s, ']');
+                        char * end = strchr(s, ']');
                         if (!end) {
                                 set_err(err, "%s:%zu: malformed section header", path, lineno);
                                 goto fail;
                         }
-                        *end = 0;
-                        char *body = s + 1;
-                        const char *arg = NULL;
+                        *end             = 0;
+                        char * body      = s + 1;
+                        const char * arg = NULL;
 
                         free(stratum);
                         stratum = NULL;
@@ -138,7 +149,7 @@ int config_load(struct config *c, const char *path, char **err) {
                                         goto fail;
                                 }
                                 stratum = xstrdup(arg);
-                                sec = SEC_STRATUM;
+                                sec     = SEC_STRATUM;
                         } else if (strcmp(body, "resolve") == 0) {
                                 sec = SEC_RESOLVE;
                         } else if (strcmp(body, "global") == 0) {
@@ -150,24 +161,24 @@ int config_load(struct config *c, const char *path, char **err) {
                         continue;
                 }
 
-                char *eq = strchr(s, '=');
+                char * eq = strchr(s, '=');
                 if (!eq) {
                         set_err(err, "%s:%zu: expected key = value", path, lineno);
                         goto fail;
                 }
-                *eq = 0;
-                char *key = trimdup(s);
-                char *val = trimdup(eq + 1);
+                *eq        = 0;
+                char * key = trimdup(s);
+                char * val = trimdup(eq + 1);
 
                 int ok = 0;
 
                 if (sec == SEC_GLOBAL && strcmp(key, "version") == 0) {
                         c->version = atoi(val);
-                        ok = 1;
+                        ok         = 1;
                 } else if (sec == SEC_RESOLVE && strcmp(key, "init") == 0) {
                         free(c->init);
                         c->init = xstrdup(val);
-                        ok = 1;
+                        ok      = 1;
                 } else if (sec == SEC_RESOLVE && strcmp(key, "order") == 0) {
                         split_list(val, &c->order);
                         ok = 1;
@@ -180,7 +191,8 @@ int config_load(struct config *c, const char *path, char **err) {
                 } else if (sec == SEC_STRATUM && strcmp(key, "units") == 0) {
                         if (!*val) {
                                 set_err(err, "%s:%zu: empty unit name", path, lineno);
-                                free(key); free(val);
+                                free(key);
+                                free(val);
                                 goto fail;
                         }
                         config_add(c, stratum, val);
@@ -214,7 +226,8 @@ fail:
         return -1;
 }
 
-static int cmp_ref(const void *a, const void *b) {
+static int cmp_ref(const void * a,
+                   const void * b) {
         const struct unit_ref *x = a, *y = b;
         int r = strcmp(x->stratum, y->stratum);
         if (r)
@@ -222,7 +235,7 @@ static int cmp_ref(const void *a, const void *b) {
         return strcmp(x->name, y->name);
 }
 
-int config_save(const struct config *c) {
+int config_save(const struct config * c) {
         sbuf b = {0};
 
         sb_addf(&b, "version = %d\n\n", c->version);
@@ -248,11 +261,11 @@ int config_save(const struct config *c) {
                 sb_add(&b, "\n");
         }
 
-        struct unit_ref *sorted = xmalloc((c->n_units ? c->n_units : 1) * sizeof(*sorted));
+        struct unit_ref * sorted = xmalloc((c->n_units ? c->n_units : 1) * sizeof(*sorted));
         memcpy(sorted, c->units, c->n_units * sizeof(*sorted));
         qsort(sorted, c->n_units, sizeof(*sorted), cmp_ref);
 
-        const char *cur = NULL;
+        const char * cur = NULL;
         for (size_t i = 0; i < c->n_units; i++) {
                 if (!cur || strcmp(cur, sorted[i].stratum) != 0) {
                         cur = sorted[i].stratum;
@@ -262,8 +275,8 @@ int config_save(const struct config *c) {
         }
         free(sorted);
 
-        char *tmp = xasprintf("%s.tmp.%ld", c->path, (long)getpid());
-        int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        char * tmp = xasprintf("%s.tmp.%ld", c->path, (long)getpid());
+        int fd     = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
         if (fd < 0) {
                 free(tmp);
                 sb_free(&b);
@@ -271,7 +284,7 @@ int config_save(const struct config *c) {
         }
 
         size_t off = 0;
-        int rc = 0;
+        int rc     = 0;
         while (off < b.n) {
                 ssize_t k = write(fd, b.s + off, b.n - off);
                 if (k < 0) {

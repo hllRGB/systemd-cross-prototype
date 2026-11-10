@@ -1,5 +1,5 @@
 #!/bedrock/libexec/busybox sh
-#
+# vim: set sw=8 ts=8 et:
 # brl systemd
 #
 #      This program is free software; you can redistribute it and/or

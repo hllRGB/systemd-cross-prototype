@@ -3,7 +3,7 @@
 Offline prototype for porting foreign stratum systemd units into the
 init-providing stratum's systemd instance, on Bedrock Linux.
 
-This repository is intentionally **not** wired into `brl` yet. It only
+Though deployed for daily use on my machine, this repository is intentionally **not** wired into `brl` yet. It only
 implements the two pieces needed to develop and test the logic offline:
 
 - a config editor/validator (`setup`, `delete`, `list`, `tree`, `check`)

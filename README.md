@@ -1,26 +1,24 @@
 # systemd-cross
 
-Offline prototype for porting foreign stratum systemd units into the
+Prototype for porting foreign stratum systemd units into the
 init-providing stratum's systemd instance, on Bedrock Linux.
 
-Though deployed for daily use on my machine, this repository is **not** ready for everyone yet. It only
-implements the two pieces needed to develop and test the logic:
+Though deployed for daily use on my machine, this repository is **not** ready for everyone yet. It currently provides:
 
 - a config editor/validator (`setup`, `delete`, `list`, `tree`, `check`)
-- a unit generator (`generate <dir>`), shaped to be called as a systemd
-  generator later
+- a unit generator (`generate <dir>`), used as a systemd generator
 
 ## Status
 
 Early but usable prototype. The generated units are written in a form that
 `systemd-analyze verify --root=` accepts, and the dependency/closure
-resolution works against fixture strata.
+resolution works against fixture strata and in daily use on my machine.
 
-## What are tested
+## What is tested
 
-- `brl-systemd setup stratum unitfile` is available,`--user` also.（export the unit for global use)
-- Generators runs well.
-- `brl-systemd delete unitfile` is avilable. (remove that from global scope)
+- `brl-systemd setup <stratum> <unitfile>` is available; `--user` is also supported. (export the unit for global use)
+- The generator runs well.
+- `brl-systemd delete <unitfile>` is available. (remove that from global scope)
 
 
 ## THINGS YOU MUST KNOW

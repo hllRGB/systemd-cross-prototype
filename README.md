@@ -17,6 +17,17 @@ Early prototype. The generated units are written in a form that
 resolution works against fixture strata. Nothing is installed into a
 live systemd yet.
 
+## THINGS YOU MUST KNOW
+
+You need extra modifications to make it work. See `## Deployment`
+
+- Export the `SYSTEMD_GENERATOR_PATH`=`/bedrock/libexec/systemd-generators:` in bedrock's `/sbin/init` so the systemd can find the generator.
+- Also export the `SYSTEMD_GENERATOR_PATH`=`/bedrock/libexec/systemd-user-generators:` to the environment through `/bedrock/etc/bedrock.conf` so the systemd-user can find it too.
+- `ncstrat` ,the `strat` binary but has no capabilities is also required. Place it to `/bedrock/libexec/ncstrat`
+
+It is only tested on my machine. Think twice before using this.
+
+
 ## Model
 
 ```
@@ -222,4 +233,8 @@ generators. No kernel command line changes are involved.
   `CapabilityBoundingSet=`, `AmbientCapabilities=` and positive
   `SystemCallFilter=` are adjusted so the wrapper can chroot
 - `Type=dbus` units depend on the init stratum's system bus policy
-- no `brl` integration, no live systemd installation
+- D-Bus activation breaks for ported units whose bus name exists only in a
+  foreign stratum: crossfs exposes the foreign D-Bus activation file, but its
+  `SystemdService=` still names the original unit, while the ported unit is
+  `<stratum>-<name>`. D-Bus therefore cannot find the unit; crossfs must be
+  changed to apply the same unit-name prefix (TODO).
